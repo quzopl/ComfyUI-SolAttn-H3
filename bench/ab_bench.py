@@ -34,7 +34,11 @@ PROMPT = ("A slow cinematic push-in on a lighthouse at dusk, waves breaking agai
 
 def build_graph(args, *, enabled: bool) -> dict:
     """Graf w formacie API. `enabled=False` daje ten sam graf ze sciezka gesta."""
-    return {
+    # Sol-Engine dla H3 sklada Sol-Attn z FirstBlockCache, wiec wspolpraca
+    # z MiniMaxH3Cache jest zamierzona. Cache pomija cale forwardy; zegar kroku
+    # oparty o sample_sigmas pozostaje wtedy poprawny, licznik by sie rozjechal.
+    model_src = "cache" if args.cache else "solattn"
+    graph = {
         "unet": {"class_type": "UNETLoader",
                  "inputs": {"unet_name": args.unet, "weight_dtype": "default"}},
         "clip": {"class_type": "CLIPLoader",
@@ -52,10 +56,10 @@ def build_graph(args, *, enabled: bool) -> dict:
                                "correctness_gate": args.gate, "strict": args.strict}},
         "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": args.seed}},
         "guider": {"class_type": "BasicGuider",
-                   "inputs": {"model": ["solattn", 0], "conditioning": ["cond", 0]}},
+                   "inputs": {"model": [model_src, 0], "conditioning": ["cond", 0]}},
         "sampler": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": args.sampler}},
         "sigmas": {"class_type": "BasicScheduler",
-                   "inputs": {"model": ["solattn", 0], "scheduler": "simple",
+                   "inputs": {"model": [model_src, 0], "scheduler": "simple",
                               "steps": args.steps, "denoise": 1.0}},
         "sample": {"class_type": "SamplerCustomAdvanced",
                    "inputs": {"noise": ["noise", 0], "guider": ["guider", 0],
@@ -69,6 +73,12 @@ def build_graph(args, *, enabled: bool) -> dict:
                  "inputs": {"images": ["decode", 0],
                             "filename_prefix": f"solattn_ab/{'on' if enabled else 'off'}"}},
     }
+    if args.cache:
+        graph["cache"] = {"class_type": "MiniMaxH3Cache",
+                          "inputs": {"model": ["solattn", 0], "resuse_threshold": 0.1,
+                                     "start_percent": 0.15, "end_percent": 0.9,
+                                     "max_steps": 2}}
+    return graph
 
 
 def post(url: str, payload: dict) -> dict:
@@ -166,6 +176,8 @@ def main() -> None:
     parser.add_argument("--gate", action="store_true", default=True)
     parser.add_argument("--strict", action="store_true", default=False)
     parser.add_argument("--timeout", type=float, default=5400)
+    parser.add_argument("--cache", action="store_true",
+                        help="wepnij MiniMaxH3Cache za wezlem — test kompozycji")
     parser.add_argument("--only", choices=["on", "off"], default=None,
                         help="uruchom tylko jeden wariant")
     args = parser.parse_args()

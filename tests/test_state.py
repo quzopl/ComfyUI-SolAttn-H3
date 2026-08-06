@@ -221,3 +221,13 @@ def test_gate_odpala_sie_raz_na_ksztalt():
 def test_gate_wylaczony_polityka():
     s = _state(correctness_gate=False)
     assert s.should_gate((31000, 56, 128)) is False
+
+
+def test_wylaczony_wezel_nie_alarmuje_na_koniec_przebiegu():
+    """Wariant `off` w benchmarku ma zero wywolan rzadkich z definicji."""
+    s = SolAttnState(Policy(strict=True, enabled=False))
+    s.begin_run()
+    for step in range(8):
+        s.begin_forward(SINK, step=step, total_steps=8)
+        s.note(DECLINE_DISABLED)
+    s.end_run()

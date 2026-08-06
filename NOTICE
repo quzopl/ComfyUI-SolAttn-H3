@@ -1,0 +1,47 @@
+ComfyUI-SolAttn-H3
+Copyright 2026
+
+Ten projekt jest integracja Sol-Attn z ComfyUI. Sam kernel nie jest tu
+vendorowany — jest instalowany jako pakiet `sol-attn` z repozytorium NVlabs.
+
+===============================================================================
+Sol-Attn / Sol-Engine
+===============================================================================
+
+Kernel `sol-attn` (0.5.0) oraz referencyjna integracja MiniMax-H3, na ktorej
+wzorowany jest ten node, pochodza z:
+
+    NVlabs/Sana, galaz sol-engine
+    https://github.com/NVlabs/Sana/tree/sol-engine
+    Licencja: Apache License 2.0
+
+Konkretnie:
+
+  * techniques/sparse_backends/            -> pakiet `sol-attn`, instalowany
+  * models/minimax_h3/optimized/sol_attn_h3.py
+        -> zrodlo polityki: tau=1.0, sink na prefiksie, pierwsze N krokow
+           i pierwsze 2 warstwy gesto, gate poprawnosci na tau=-1000,
+           sonda gestosci routingu
+
+Publikacja:
+
+    Sol-Attn: Accelerating Video Generation Inference via On-the-Fly
+    Attention Sparsification
+    Li, Haopeng; Li, Yitong; Chen, Junsong; Ye, Tian; Liu, Haozhe; Yu, Jincheng;
+    Wang, Duomin; Zhang, Ruihua; Xie, Zeke; Xie, Enze; Han, Song
+    arXiv:2607.24027 (2026)
+
+===============================================================================
+Odstepstwa od referencji
+===============================================================================
+
+Trzy decyzje projektowe roznia sie od `sol_attn_h3.py`; kazda dlatego, ze
+ComfyUI udostepnia informacje, ktorych nie mial runtime SGLang:
+
+  1. Numer kroku czytany z `transformer_options["sample_sigmas"]` zamiast
+     zgadywany z kierunku zmian timestepu.
+  2. Zakres sinka brany z `PackedLayout.segments` zamiast wnioskowany
+     z nieciaglosci `video_indices`.
+  3. Kryterium gate'u dla najgorszego elementu jest wzgledne (`max_rel`)
+     zamiast bezwzglednego (`max_abs`); `mean_abs` i `rel_l2` bez zmian.
+     Uzasadnienie pomiarowe w README i w docstringu `run_gate`.

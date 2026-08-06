@@ -241,7 +241,9 @@ class SolAttnState:
         jest sam w sobie legalny. Blad istnieje tylko w agregacie.
         """
         self.flush_timing()
-        if self._max_step < 0:
+        # Wylaczony wezel to nie jest awaria pomiaru — wariant `off` w benchmarku
+        # ma zero wywolan rzadkich z definicji.
+        if not self.policy.enabled or self._max_step < 0:
             return
         warmup = dense_step_count(self.policy.first_dense_steps, self.total_steps)
         if self._max_step + 1 <= warmup or self.sparse_calls > 0:
