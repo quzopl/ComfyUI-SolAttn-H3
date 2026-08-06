@@ -6,6 +6,7 @@ wymaga `comfy`, przewraca sie cala suite, a nie jeden test.
 """
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -13,10 +14,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _load(name):
+    """Zaladuj repo jako pakiet pod podana nazwa.
+
+    Rejestracja w sys.modules przed exec_module jest konieczna: bez niej import
+    wzgledny `.nodes` w __init__.py nie ma jak rozwiazac pakietu nadrzednego.
+    """
     spec = importlib.util.spec_from_file_location(
         name, ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
     return module
 
 
