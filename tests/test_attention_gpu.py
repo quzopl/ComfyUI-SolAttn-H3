@@ -119,3 +119,42 @@ def test_zapasowy_licznik_blokow_gdy_brak_stempla():
                  transformer_options={})
     assert state.stats()["declined"] == {"dense_layer": 2}
     assert state.stats()["sparse_calls"] == 1
+
+
+# --- kryterium gate'u -------------------------------------------------------
+
+def test_gate_odrzuca_zepsuty_kernel():
+    """Po zamianie progu bezwzglednego na wzgledny gate musi nadal lapac blad.
+
+    Zepsuty routing albo indeksowanie daje blad wzgledny rzedu procentow i wyzej;
+    5% przechodzi przez `mean_abs`, ale nie przez `max_rel`.
+    """
+    q, k, v = _bhsd()
+    qb, kb, vb = (x.transpose(1, 2).contiguous() for x in (q, k, v))
+
+    def zepsuty(a, b, c, **kw):
+        return dense_bthd(a, b, c) * 1.05
+
+    stats = run_gate(zepsuty, qb, kb, vb, "diag")
+    assert not stats["passed"], stats
+    assert stats["max_rel"] > stats["limits"]["max_rel"]
+
+
+def test_gate_przepuszcza_kernel_idealny():
+    q, k, v = _bhsd()
+    qb, kb, vb = (x.transpose(1, 2).contiguous() for x in (q, k, v))
+    stats = run_gate(lambda a, b, c, **kw: dense_bthd(a, b, c), qb, kb, vb, "diag")
+    assert stats["passed"] and stats["max_rel"] == 0.0
+
+
+def test_gate_nie_zalezy_od_skali_wyjscia():
+    """Sedno zmiany: to samo zaburzenie wzgledne ma dac ten sam werdykt
+    niezaleznie od tego, jak duze sa aktywacje. Prog bezwzgledny tego nie mial."""
+    q, k, v = _bhsd()
+    qb, kb, vb = (x.transpose(1, 2).contiguous() for x in (q, k, v))
+    verdicts = []
+    for scale in (1.0, 50.0):
+        big = [x * scale for x in (qb, kb, vb)]
+        stats = run_gate(lambda a, b, c, **kw: dense_bthd(a, b, c) * 1.05, *big, "diag")
+        verdicts.append(stats["passed"])
+    assert verdicts == [False, False], verdicts
