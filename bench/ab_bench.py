@@ -77,7 +77,7 @@ def build_graph(args, *, enabled: bool) -> dict:
         graph["cache"] = {"class_type": "MiniMaxH3Cache",
                           "inputs": {"model": ["solattn", 0], "resuse_threshold": 0.1,
                                      "start_percent": 0.15, "end_percent": 0.9,
-                                     "max_steps": 2}}
+                                     "max_steps": 2, "device": "auto", "verbose": False}}
     return graph
 
 
