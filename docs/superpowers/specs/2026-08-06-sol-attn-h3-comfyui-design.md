@@ -209,9 +209,32 @@ Gate na produkcyjnej liczbie głów rozgrzewa też autotuning Tritona w
 `preprocess.prepare`, który kluczuje po samym `T` — pierwsze wywołanie przy
 jednej głowie zapisałoby konfigurację dobraną dla siatki jednogłowowej.
 
-Progi: `max_abs ≤ 0,15` (≥32k tokenów, inaczej 0,08), `mean_abs ≤ 0,002`,
-`rel_l2 ≤ 0,005`. Fail → wyjątek; cicha akceptacja zepsutego kernela jest
-gorsza niż brak przyspieszenia.
+Progi: `max_rel ≤ 0,02`, `mean_abs ≤ 0,002`, `rel_l2 ≤ 0,005`. Fail → wyjątek;
+cicha akceptacja zepsutego kernela jest gorsza niż brak przyspieszenia.
+
+**Odstępstwo od referencji, ustalone pomiarem.** Pierwotnie przyjęto progi
+NVIDII w całości, w tym bezwzględny `max_abs ≤ 0,08` (albo 0,15 powyżej 32k
+tokenów). Pierwszy przebieg na prawdziwym H3 go nie przeszedł: `max_abs = 0,125`
+przy `mean_abs = 0,000305` (6,5× zapasu) i `rel_l2 = 0,00111` (4,5× zapasu).
+
+Sprawdzone dwie hipotezy:
+
+1. *Niepełny ostatni blok* — `T = 5548` to 86 pełnych bloków po 64 plus 44,
+   a wszystkie kształty w spike'u były wielokrotnościami 64. Obalone: ten sam
+   `T` na tensorach syntetycznych daje `max_abs = 0,00012`, identycznie jak
+   kształty pełnoblokowe.
+2. *Skala aktywacji* — potwierdzone. Zmierzone `ref_max = 33,0`. bf16 ma 7 bitów
+   mantysy, więc dla `|x| ∈ [32, 64)` ulp wynosi `32·2⁻⁷ = 0,25`, a granica
+   poprawnego zaokrąglenia to pół ulpa, czyli **dokładnie 0,125**. Najgorszy
+   element był teoretycznym minimum błędu reprezentacji przy tej skali.
+
+Wniosek: nie próg był za ciasny, tylko kryterium nieprzenośne — bezwzględny
+limit w przestrzeni wyjścia zakłada rozkład aktywacji, na którym go zmierzono.
+Zmienione zostało **wyłącznie** kryterium maksimum, na względne
+`max_rel = max_abs / ref_max`. `mean_abs` i `rel_l2` pozostają dokładnie takie,
+jakie ustawiła NVIDIA. Trzy testy pilnują, że rozluźnienie nie rozbroiło gate'u:
+odrzucenie kernela zaburzonego o 5%, przepuszczenie idealnego i niezależność
+werdyktu od skali wyjścia.
 
 **Sonda gęstości** — raz. Raportuje `threshold_density` i `effective_density`.
 Gęstość bliska 1,0 znaczy, że routing nie routuje; 0,0 — że się zapadł.

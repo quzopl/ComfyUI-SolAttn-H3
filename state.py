@@ -100,7 +100,9 @@ class SolAttnState:
     backend: str | None = field(default=None, init=False)
 
     sol_attn: object | None = field(default=None, init=False)
-    attn_ms: dict = field(default_factory=lambda: {"sparse": 0.0, "dense": 0.0}, init=False)
+    attn_ms: dict = field(
+        default_factory=lambda: {"sparse": 0.0, "dense": 0.0, "sparse_first": 0.0},
+        init=False)
 
     _events: list = field(default_factory=list, init=False)
 
@@ -123,7 +125,7 @@ class SolAttnState:
         self._block = 0
         self._oom = False
         self._logged = set()
-        self.attn_ms = {"sparse": 0.0, "dense": 0.0}
+        self.attn_ms = {"sparse": 0.0, "dense": 0.0, "sparse_first": 0.0}
         self._events = []
 
     def begin_forward(self, sink: SinkRange | None, step: int | None,
@@ -262,6 +264,22 @@ class SolAttnState:
 
     # -- raport ---------------------------------------------------------------
 
+    def _per_call(self) -> dict:
+        """Czas na wywolanie, z pierwszym wywolaniem rzadkim wylaczonym.
+
+        W pierwszym siedzi kompilacja kerneli Tritona, gate poprawnosci i sonda
+        gestosci — koszty jednorazowe, ktore przy krotkim przebiegu przebijaja
+        wlasciwy pomiar (przy 288 wywolaniach kompilacja rzedu 4 s to 14 ms na
+        wywolanie, czyli wiecej niz sam kernel).
+        """
+        steady = max(self.sparse_calls - 1, 0)
+        return {
+            "sparse": round(self.attn_ms["sparse"] / steady, 2) if steady else None,
+            "dense": round(self.attn_ms["dense"] / self.dense_calls, 2)
+                     if self.dense_calls else None,
+            "sparse_first_ms": round(self.attn_ms["sparse_first"], 1),
+        }
+
     def stats(self) -> dict:
         total = self.sparse_calls + self.dense_calls
         return {
@@ -270,6 +288,7 @@ class SolAttnState:
             "dense_calls": self.dense_calls,
             "sparse_fraction": round(self.sparse_calls / total, 4) if total else None,
             "attn_ms": {k: round(v, 1) for k, v in self.attn_ms.items()},
+            "attn_ms_per_call": self._per_call(),
             "last_step": self.step,
             "total_steps": self.total_steps,
             "dense_steps": dense_step_count(self.policy.first_dense_steps, self.total_steps),

@@ -190,7 +190,8 @@ def make_override(state, policy):
 
         if pair is not None:
             pair[1].record()
-            state.record_timing(pair, "sparse")
+            # Pierwsze wywolanie niesie kompilacje Tritona, gate i sonde gestosci.
+            state.record_timing(pair, "sparse_first" if state.sparse_calls == 0 else "sparse")
         state.note_sparse()
         if kwargs.get("skip_output_reshape"):
             return out.transpose(1, 2)

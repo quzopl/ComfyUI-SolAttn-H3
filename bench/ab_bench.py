@@ -7,8 +7,12 @@ Porownywane sa dwie rzeczy naraz, bo mierza co innego:
   * **czas samej uwagi** — czesc, na ktora Sol-Attn faktycznie wplywa, zbierana
     zdarzeniami CUDA wewnatrz node'a i raportowana w `stats()`.
 
-Porownanie wyniku idzie po latentach, nie po klatkach: VAE jest deterministyczne,
-wiec latent jest scislejszy i nie wymaga ladowania dekodera.
+Wynik porownywany jest na zdekodowanych klatkach (PSNR): SaveLatent nie obsluguje
+latentu H3, ktory jest NestedTensorem z wideo i audio spakowanymi razem.
+
+Pierwsze uruchomienie po starcie ComfyUI placi za zaladowanie modelu w wariancie
+`off`, co zaburza porownanie — nalezy odpalic benchmark dwa razy i czytac drugi
+przebieg.
 
 Uzycie:
     python bench/ab_bench.py --port 8199 --steps 8 --width 640 --height 384 --length 73
@@ -17,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import pathlib
 import time
 import urllib.error
 import urllib.request
@@ -55,8 +61,12 @@ def build_graph(args, *, enabled: bool) -> dict:
                    "inputs": {"noise": ["noise", 0], "guider": ["guider", 0],
                               "sampler": ["sampler", 0], "sigmas": ["sigmas", 0],
                               "latent_image": ["cond", 1]}},
-        "save": {"class_type": "SaveLatent",
-                 "inputs": {"samples": ["sample", 0],
+        # SaveLatent nie obsluguje latentu H3 (NestedTensor: wideo i audio
+        # spakowane razem), wiec porownanie idzie po zdekodowanych klatkach.
+        "decode": {"class_type": "VAEDecode",
+                   "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
+        "save": {"class_type": "SaveImage",
+                 "inputs": {"images": ["decode", 0],
                             "filename_prefix": f"solattn_ab/{'on' if enabled else 'off'}"}},
     }
 
@@ -94,6 +104,46 @@ def run_once(base: str, graph: dict, label: str, timeout: float) -> dict:
                     "outputs": entry.get("outputs", {})}
         time.sleep(1.0)
     raise TimeoutError(f"[{label}] przekroczono {timeout:.0f} s")
+
+
+def compare_frames(off: dict, on: dict) -> None:
+    """PSNR miedzy klatkami obu wariantow.
+
+    Sol-Attn to aproksymacja, wiec identycznosci nie oczekujemy — chodzi o to,
+    czy trajektoria pozostala rozpoznawalnie ta sama.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        print(f"\nPorownanie klatek pominiete: {exc}")
+        return
+
+    root = pathlib.Path.home() / "comfyX" / "ComfyUI" / "output"
+    pairs = []
+    for a, b in zip(sorted(_frames(off, root)), sorted(_frames(on, root))):
+        x = np.asarray(Image.open(a), dtype=np.float64)
+        y = np.asarray(Image.open(b), dtype=np.float64)
+        if x.shape != y.shape:
+            print(f"\nPorownanie klatek pominiete: rozne ksztalty {x.shape} vs {y.shape}")
+            return
+        mse = float(((x - y) ** 2).mean())
+        psnr = float("inf") if mse == 0 else 10 * math.log10(255.0 ** 2 / mse)
+        pairs.append((psnr, float(np.abs(x - y).max())))
+    if not pairs:
+        print("\nPorownanie klatek pominiete: brak zapisanych klatek")
+        return
+    psnrs = [p for p, _ in pairs]
+    print(f"\nPorownanie klatek off vs on ({len(pairs)} klatek):")
+    print(f"  PSNR: min={min(psnrs):.2f} dB  sredni={sum(psnrs) / len(psnrs):.2f} dB  "
+          f"max={max(psnrs):.2f} dB")
+    print(f"  najwieksza roznica na pikselu: {max(d for _, d in pairs):.0f}/255")
+
+
+def _frames(result: dict, root: pathlib.Path):
+    for node in result.get("outputs", {}).values():
+        for image in node.get("images", []):
+            yield root / image.get("subfolder", "") / image["filename"]
 
 
 def main() -> None:
@@ -137,6 +187,8 @@ def main() -> None:
         off, on = results[0]["wall_s"], results[1]["wall_s"]
         print(f"\nend-to-end: {off / on:.3f}x "
               f"({'szybciej' if on < off else 'wolniej'} z nodem)")
+    if len(results) == 2:
+        compare_frames(results[0], results[1])
     print("\nCzas samej uwagi i statystyki routingu sa w logu ComfyUI "
           "(linie [sol-attn-h3]).")
 
