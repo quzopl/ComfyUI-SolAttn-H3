@@ -128,8 +128,18 @@ def make_override(state, policy):
         )
         if reason is not None:
             state.note(reason)
-            return dense()
+            pair = state.timer()
+            if pair is not None:
+                pair[0].record()
+            out = dense()
+            if pair is not None:
+                pair[1].record()
+                state.record_timing(pair, "dense")
+            return out
 
+        pair = state.timer()
+        if pair is not None:
+            pair[0].record()
         try:
             sol_attn = state.sol_attn or _attach_kernel(state)
             # Kernel wymaga contiguous BTHD; H3 podaje widoki w spakowanym
@@ -156,6 +166,9 @@ def make_override(state, policy):
                   flush=True)
             return dense()
 
+        if pair is not None:
+            pair[1].record()
+            state.record_timing(pair, "sparse")
         state.note_sparse()
         if kwargs.get("skip_output_reshape"):
             return out.transpose(1, 2)

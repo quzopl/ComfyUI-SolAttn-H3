@@ -100,6 +100,9 @@ class SolAttnState:
     backend: str | None = field(default=None, init=False)
 
     sol_attn: object | None = field(default=None, init=False)
+    attn_ms: dict = field(default_factory=lambda: {"sparse": 0.0, "dense": 0.0}, init=False)
+
+    _events: list = field(default_factory=list, init=False)
 
     _block: int = field(default=0, init=False)
     _max_step: int = field(default=-1, init=False)
@@ -120,6 +123,8 @@ class SolAttnState:
         self._block = 0
         self._oom = False
         self._logged = set()
+        self.attn_ms = {"sparse": 0.0, "dense": 0.0}
+        self._events = []
 
     def begin_forward(self, sink: SinkRange | None, step: int | None,
                       total_steps: int | None) -> None:
@@ -195,12 +200,45 @@ class SolAttnState:
     def note_sparse(self) -> None:
         self.sparse_calls += 1
 
+    # -- pomiar czasu uwagi ---------------------------------------------------
+
+    def timer(self):
+        """Para zdarzen CUDA do zmierzenia jednego wywolania uwagi.
+
+        Zdarzenia rejestruja sie asynchronicznie; synchronizacja nastepuje raz,
+        w `flush_timing()`. Dzieki temu pomiar nie serializuje strumienia.
+        """
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+
+    def record_timing(self, pair, kind: str) -> None:
+        if pair is not None:
+            self._events.append((pair, kind))
+
+    def flush_timing(self) -> None:
+        """Zsumuj zmierzone czasy. Jedna synchronizacja na caly przebieg."""
+        if not self._events:
+            return
+        import torch
+
+        torch.cuda.synchronize()
+        for (start, end), kind in self._events:
+            try:
+                self.attn_ms[kind] += start.elapsed_time(end)
+            except RuntimeError:      # zdarzenie nigdy nie trafilo na strumien
+                continue
+        self._events = []
+
     def end_run(self) -> None:
         """Kontrola zbiorcza: przebieg, ktory minal rozgrzewke i nie tknal kernela.
 
         Powody per-call tego nie wylapia, bo powod robiacy szkode (warmup_step)
         jest sam w sobie legalny. Blad istnieje tylko w agregacie.
         """
+        self.flush_timing()
         if self._max_step < 0:
             return
         warmup = dense_step_count(self.policy.first_dense_steps, self.total_steps)
@@ -231,6 +269,7 @@ class SolAttnState:
             "sparse_calls": self.sparse_calls,
             "dense_calls": self.dense_calls,
             "sparse_fraction": round(self.sparse_calls / total, 4) if total else None,
+            "attn_ms": {k: round(v, 1) for k, v in self.attn_ms.items()},
             "last_step": self.step,
             "total_steps": self.total_steps,
             "dense_steps": dense_step_count(self.policy.first_dense_steps, self.total_steps),
