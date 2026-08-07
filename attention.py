@@ -181,8 +181,17 @@ def make_override(state, policy):
             # The sink makes the prefix exact as K/V, but its own query rows
             # still route sparsely. The kernel's README is explicit that an
             # MMDiT integration must recompute those rows densely.
+            #
+            # That recomputation goes through `func` — the backend ComfyUI is
+            # already configured with — rather than through SDPA. Same maths,
+            # measurably faster path (SageAttention is ~2.5x SDPA at these
+            # shapes), and it consumes the original strided views, so it needs
+            # no contiguous copy of its own.
             if sink.tokens:
-                out[:, sink.start:sink.stop] = dense_bthd(qb[:, sink.start:sink.stop], kb, vb)
+                lo, hi = sink.start, sink.stop
+                prefix = func(q[:, :, lo:hi], k, v, heads, mask=None,
+                              skip_reshape=True, skip_output_reshape=True)
+                out[:, lo:hi] = prefix.transpose(1, 2)
         except torch.OutOfMemoryError:
             state.latch_oom()
             print(f"{LOG} out of memory on the sparse path; dense attention for the "

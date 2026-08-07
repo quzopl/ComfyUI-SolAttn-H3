@@ -24,6 +24,29 @@ the *slowest* supported path. SM90/SM100/SM120 get CuTe DSL kernels, which this
 machine cannot exercise. Do not transfer these numbers to other GPUs; run
 `selftest.py` on yours instead.
 
+> ### ⚠️ Read this before you expect a speedup
+>
+> **The baseline you compare against decides the outcome.** Everything in this
+> section is measured against ComfyUI's `pytorch attention` (SDPA). Against
+> **SageAttention** on the same card, at the default `tau=1.0`, this node is a
+> **net loss**:
+>
+> | Baseline (seq 17 504, 20 steps, SM89) | ms per attention call | End-to-end |
+> |---|---:|---:|
+> | SageAttention, node off | 43.20 | 157.5 s |
+> | Sol-Attn, node on | 51.77 | 169.6 s (**0.93×**) |
+>
+> The kernel itself wins — 57.3 ms against SageAttention's 65.3 ms in isolation
+> at seq 20 530, i.e. 1.14×. What eats the win is everything around it: three
+> contiguous BTHD copies (~840 MiB of temporaries per call) and the dense
+> recomputation of the prefix query rows. On a card that is already streaming a
+> 20 GB model through 12 GB of VRAM, those temporaries cost more wall clock than
+> an isolated benchmark suggests.
+>
+> **Gains at `tau=1.0` are not guaranteed. Check `attn_ms_per_call` in your own
+> log before assuming any.** The levers that do produce a win — a higher `tau`,
+> or `sink_mode=text` — trade quality; see [Tuning](#tuning-when-the-default-loses).
+
 ### End-to-end, MiniMax-H3 in ComfyUI
 
 864×480, 125 frames (**17 504**-row packed sequence), 8 steps, `res_multistep`,
@@ -97,6 +120,37 @@ This is precisely why the step index is read from `sample_sigmas` rather than
 counted: **a forward counter would drift on every skipped step.**
 
 ---
+
+## Tuning: when the default loses
+
+Two levers move the cost materially. Both trade quality, so neither is a default.
+Measured in isolation at seq 20 530, 56 heads, against SageAttention (~56.5 ms):
+
+| `sink_mode` | `tau` | kernel | prefix recompute | total | vs Sage |
+|---|---:|---:|---:|---:|---:|
+| prefix (1 495 rows) | 1.0 | 57.3 ms | 14.1 ms | 83.4 ms | 0.78× |
+| prefix | 1.5 | 33.7 ms | 12.4 ms | 50.1 ms | 1.13× |
+| prefix | 2.0 | 26.0 ms | 12.4 ms | 42.4 ms | 1.34× |
+| text (537 rows) | 1.0 | 42.3 ms | 5.2 ms | 51.5 ms | 1.10× |
+| text | 1.5 | 25.3 ms | 5.2 ms | 34.5 ms | 1.64× |
+
+**`sink_mode` is the lever most people should try first, and its cost is
+shape-dependent in a way the reference does not spell out.** NVIDIA's H3
+integration estimates `prefix` at "about 1 % density" over `text` — but that was
+measured with a 951-row prefix in a 38 247-row sequence, i.e. **2.5 %** of the
+sequence. Put the same prefix in a 20 530-row sequence and it is **7.3 %**, and
+the cost scales with it: the sink forces those blocks exact for *every* query
+*and* has to be recomputed densely. `text` is the policy the kernel's own README
+describes; `prefix` was added by the H3 team as an audio-quality safeguard, and
+that safeguard gets three times more expensive at short sequence lengths.
+
+The risk is concrete and named: NVIDIA recorded a prompt whose picture scored
+best of its set while its dialogue fell apart. If your outputs carry speech,
+verify on your own material before keeping `text`.
+
+`tau` behaves predictably and is shape-independent: the routing threshold yields
+the same `threshold_density` (0.155 at `tau=1.0`, 0.102 at 1.25, 0.064 at 1.5)
+regardless of sequence length. Only the sink's contribution varies.
 
 ## Quality — and why off-vs-on PSNR misleads
 

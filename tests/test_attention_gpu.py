@@ -21,9 +21,15 @@ def _bhsd():
     return [x.view(T, H, D).transpose(0, 1).unsqueeze(0) for x in packed.split(H * D, dim=-1)]
 
 
-def _fake_func(q, k, v, heads, **kw):
-    """Stand-in for ComfyUI's original attention backend."""
+def _fake_func(q, k, v, heads, skip_output_reshape=False, **kw):
+    """Stand-in for ComfyUI's original attention backend.
+
+    Honours skip_output_reshape, because the adapter uses it to recompute the
+    prefix query rows without a round trip through the flattened layout.
+    """
     out = dense_bthd(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
+    if skip_output_reshape:
+        return out.transpose(1, 2)
     return out.reshape(out.shape[0], out.shape[1], heads * out.shape[3])
 
 
@@ -160,3 +166,27 @@ def test_gate_is_independent_of_output_scale():
         stats = run_gate(lambda a, b, c, **kw: dense_bthd(a, b, c) * 1.05, *big, "diag")
         verdicts.append(stats["passed"])
     assert verdicts == [False, False], verdicts
+
+
+
+def test_prefix_recompute_goes_through_the_model_backend():
+    """The prefix rows must be recomputed with `func`, not with SDPA.
+
+    That is what makes the recomputation run on whatever fast attention ComfyUI
+    is configured with. The probe also pins the call shape: queries sliced to the
+    sink, keys and values full length, BHSD in and BHSD out.
+    """
+    q, k, v = _bhsd()
+    seen = []
+
+    def probe(qq, kk, vv, heads, skip_output_reshape=False, **kw):
+        seen.append((tuple(qq.shape), tuple(kk.shape), skip_output_reshape))
+        return _fake_func(qq, kk, vv, heads,
+                          skip_output_reshape=skip_output_reshape, **kw)
+
+    state = _ready_state()
+    make_override(state, state.policy)(
+        probe, q, k, v, H, mask=None, skip_reshape=True,
+        transformer_options={"solattn_block": 4})
+
+    assert seen == [((1, H, SINK.tokens, D), (1, H, T, D), True)], seen
