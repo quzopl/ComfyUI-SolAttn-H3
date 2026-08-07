@@ -1,11 +1,11 @@
-"""Generuje wykresy do README z pomiarow zebranych na RTX 4070 Ti (SM89 / Triton).
+"""Builds the README charts from measurements taken on an RTX 4070 Ti (SM89 / Triton).
 
-Wszystkie liczby pochodza z realnych przebiegow:
-  * panel A — selftest.py na syntetycznych QKV, 56 glow, head_dim 128
-  * panel B — MiniMax-H3 w ComfyUI, 864x480x125 (sekwencja 17504), 8 krokow
+Every number comes from a real run:
+  * panel A — selftest.py on synthetic QKV, 56 heads, head_dim 128
+  * panel B — MiniMax-H3 in ComfyUI, 864x480x125 (17504-row sequence), 8 steps
 
-Kolor jest przypisany do encji, nie do pozycji w grupie: Sol-Attn zawsze
-niebieski, SDPA pomaranczowy, SageAttention aqua — tak samo w obu panelach.
+Colour is bound to the entity rather than to a position within the group:
+Sol-Attn is always blue, SDPA orange, SageAttention aqua — in both panels.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from matplotlib.ticker import MultipleLocator
 
 OUT = pathlib.Path(__file__).resolve().parent / "images"
 
-# Paleta referencyjna dataviz, sloty 1-3. Zwalidowane skryptem validate_palette.js:
-# jasny — CVD dE 9.2, normal 27.6; ciemny — CVD dE 9.4, normal 26.5.
+# The dataviz reference palette, slots 1-3. Validated with validate_palette.js:
+# light - CVD dE 9.2, normal 27.6; dark - CVD dE 9.4, normal 26.5.
 THEMES = {
     "light": {
         "surface": "#fcfcfb", "primary": "#0b0b0b", "secondary": "#52514e",
@@ -33,18 +33,18 @@ THEMES = {
     },
 }
 
-# Panel A: ms na wywolanie uwagi, syntetyczne QKV (selftest.py)
+# Panel A: ms per attention call, synthetic QKV (selftest.py)
 KERNEL_X = ["8 192", "16 384", "30 976"]
 KERNEL = {
     "Sol-Attn": [10.2, 31.7, 99.6],
     "SDPA": [26.4, 105.4, 380.0],
     "SageAttention": [11.2, 40.0, 133.6],
 }
-# Panel B: sekundy, MiniMax-H3 w ComfyUI, sekwencja 17504, 8 krokow
+# Panel B: seconds, MiniMax-H3 in ComfyUI, 17504-row sequence, 8 steps
 REAL_X = ["End-to-end", "Attention only"]
 REAL = {
-    "SDPA": [116.1, 45.5],     # wezel wylaczony — domyslna uwaga ComfyUI
-    "Sol-Attn": [84.2, 26.8],  # wezel wlaczony
+    "SDPA": [116.1, 45.5],     # node disabled - ComfyUI default attention
+    "Sol-Attn": [84.2, 26.8],  # node enabled
 }
 
 
@@ -62,7 +62,7 @@ def _style(ax, theme, *, ylabel):
 
 
 def _grouped(ax, theme, categories, series, *, label_series, fmt, speedup_vs=None):
-    """Slupki grupowane z 2px przerwa miedzy sasiadami i etykietami na wybranej serii."""
+    """Grouped bars with a 2px gap between neighbours, labels on one chosen series."""
     n = len(series)
     span = 0.74
     width = span / n
@@ -113,7 +113,7 @@ def build(mode: str) -> pathlib.Path:
     right.set_xlabel("node disabled (SDPA)  vs  node enabled (Sol-Attn)",
                      color=theme["secondary"], fontsize=9, labelpad=6)
     right.set_ylim(0, 140)
-    # Wspolczynnik przyspieszenia nad kazda para — to jest wlasciwy komunikat panelu.
+    # The speedup ratio above each pair - that is the panel's actual message.
     for index, (off, on) in enumerate(zip(REAL["SDPA"], REAL["Sol-Attn"])):
         right.annotate(f"{off / on:.2f}x faster", (index, max(off, on)),
                        textcoords="offset points", xytext=(0, 22), ha="center",
@@ -140,4 +140,4 @@ def build(mode: str) -> pathlib.Path:
 
 if __name__ == "__main__":
     for mode in ("light", "dark"):
-        print("zapisano:", build(mode))
+        print("written:", build(mode))

@@ -1,9 +1,9 @@
-"""Rejestruje repo jako pakiet `solattn_h3` bez wykonywania __init__.py.
+"""Register the repo as a `solattn_h3` package without executing __init__.py.
 
-ComfyUI importuje custom node jako pakiet, wiec moduly uzywaja importow
-wzglednych. Testy jednostkowe nie moga jednak wykonac __init__.py, bo ten
-ciagnie za soba `comfy`, ktorego poza ComfyUI nie ma. Rejestracja samego
-__path__ daje dzialajace `from solattn_h3.layout import ...` i zero zaleznosci.
+ComfyUI imports a custom node as a package, so the modules use relative imports.
+Unit tests, however, must not execute __init__.py, because that pulls in `comfy`
+which does not exist outside ComfyUI. Registering just the __path__ makes
+`from solattn_h3.layout import ...` work with zero dependencies.
 """
 import pathlib
 import sys

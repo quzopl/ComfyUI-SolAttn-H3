@@ -1,29 +1,29 @@
 ComfyUI-SolAttn-H3
 Copyright 2026
 
-Ten projekt jest integracja Sol-Attn z ComfyUI. Sam kernel nie jest tu
-vendorowany — jest instalowany jako pakiet `sol-attn` z repozytorium NVlabs.
+This project is an integration of Sol-Attn with ComfyUI. The kernel itself is
+not vendored here — it is installed as the `sol-attn` package from NVlabs.
 
 ===============================================================================
 Sol-Attn / Sol-Engine
 ===============================================================================
 
-Kernel `sol-attn` (0.5.0) oraz referencyjna integracja MiniMax-H3, na ktorej
-wzorowany jest ten node, pochodza z:
+The `sol-attn` kernel (0.5.0) and the reference MiniMax-H3 integration this node
+is modelled on both come from:
 
-    NVlabs/Sana, galaz sol-engine
+    NVlabs/Sana, sol-engine branch
     https://github.com/NVlabs/Sana/tree/sol-engine
-    Licencja: Apache License 2.0
+    License: Apache License 2.0
 
-Konkretnie:
+Specifically:
 
-  * techniques/sparse_backends/            -> pakiet `sol-attn`, instalowany
+  * techniques/sparse_backends/            -> the `sol-attn` package, installed
   * models/minimax_h3/optimized/sol_attn_h3.py
-        -> zrodlo polityki: tau=1.0, sink na prefiksie, pierwsze N krokow
-           i pierwsze 2 warstwy gesto, gate poprawnosci na tau=-1000,
-           sonda gestosci routingu
+        -> source of the policy: tau=1.0, sink over the prefix, first N steps
+           and first 2 layers dense, correctness gate at tau=-1000, routing
+           density probe
 
-Publikacja:
+Publication:
 
     Sol-Attn: Accelerating Video Generation Inference via On-the-Fly
     Attention Sparsification
@@ -32,16 +32,17 @@ Publikacja:
     arXiv:2607.24027 (2026)
 
 ===============================================================================
-Odstepstwa od referencji
+Divergences from the reference
 ===============================================================================
 
-Trzy decyzje projektowe roznia sie od `sol_attn_h3.py`; kazda dlatego, ze
-ComfyUI udostepnia informacje, ktorych nie mial runtime SGLang:
+Three design decisions differ from `sol_attn_h3.py`, each because ComfyUI
+exposes information the SGLang runtime did not:
 
-  1. Numer kroku czytany z `transformer_options["sample_sigmas"]` zamiast
-     zgadywany z kierunku zmian timestepu.
-  2. Zakres sinka brany z `PackedLayout.segments` zamiast wnioskowany
-     z nieciaglosci `video_indices`.
-  3. Kryterium gate'u dla najgorszego elementu jest wzgledne (`max_rel`)
-     zamiast bezwzglednego (`max_abs`); `mean_abs` i `rel_l2` bez zmian.
-     Uzasadnienie pomiarowe w README i w docstringu `run_gate`.
+  1. The step index is read from `transformer_options["sample_sigmas"]` rather
+     than guessed from the direction of timestep change.
+  2. The sink range comes from `PackedLayout.segments` rather than being
+     inferred from discontinuities in `video_indices`.
+  3. The gate criterion for the worst element is relative (`max_rel`) rather
+     than absolute (`max_abs`); `mean_abs` and `rel_l2` are unchanged. The
+     measurement behind that decision is in the README and in the `run_gate`
+     docstring.

@@ -1,20 +1,21 @@
-"""Pomiar A/B: ten sam graf H3 z wezlem SolAttnH3 i bez niego.
+"""A/B measurement: the same H3 graph with and without the SolAttnH3 node.
 
-Porownywane sa dwie rzeczy naraz, bo mierza co innego:
+Two things are compared at once, because they measure different things:
 
-  * **czas end-to-end** — to, co widzi uzytkownik, ale na maszynie, gdzie model
-    nie miesci sie w VRAM, zdominuje go streaming wag przez PCIe, a nie uwaga;
-  * **czas samej uwagi** — czesc, na ktora Sol-Attn faktycznie wplywa, zbierana
-    zdarzeniami CUDA wewnatrz node'a i raportowana w `stats()`.
+  * **end-to-end time** — what the user sees, but on a machine where the model
+    does not fit in VRAM it is dominated by weight streaming over PCIe, not by
+    attention;
+  * **attention time** — the part Sol-Attn actually affects, collected with CUDA
+    events inside the node and reported in `stats()`.
 
-Wynik porownywany jest na zdekodowanych klatkach (PSNR): SaveLatent nie obsluguje
-latentu H3, ktory jest NestedTensorem z wideo i audio spakowanymi razem.
+Outputs are compared on decoded frames (PSNR): SaveLatent cannot handle the H3
+latent, which is a NestedTensor with video and audio packed together.
 
-Pierwsze uruchomienie po starcie ComfyUI placi za zaladowanie modelu w wariancie
-`off`, co zaburza porownanie — nalezy odpalic benchmark dwa razy i czytac drugi
-przebieg.
+The first invocation after ComfyUI starts pays for model loading in the `off`
+variant, which skews the comparison — run the benchmark twice and read the
+second pass.
 
-Uzycie:
+Usage:
     python bench/ab_bench.py --port 8199 --steps 8 --width 640 --height 384 --length 73
 """
 from __future__ import annotations
@@ -33,10 +34,10 @@ PROMPT = ("A slow cinematic push-in on a lighthouse at dusk, waves breaking agai
 
 
 def build_graph(args, *, enabled: bool) -> dict:
-    """Graf w formacie API. `enabled=False` daje ten sam graf ze sciezka gesta."""
-    # Sol-Engine dla H3 sklada Sol-Attn z FirstBlockCache, wiec wspolpraca
-    # z MiniMaxH3Cache jest zamierzona. Cache pomija cale forwardy; zegar kroku
-    # oparty o sample_sigmas pozostaje wtedy poprawny, licznik by sie rozjechal.
+    """The graph in API format. `enabled=False` gives the same graph, dense path."""
+    # Sol-Engine's H3 line composes Sol-Attn with FirstBlockCache, so working
+    # alongside MiniMaxH3Cache is intended. The cache skips whole forwards; the
+    # sample_sigmas-based step clock stays correct where a counter would drift.
     model_src = "cache" if args.cache else "solattn"
     graph = {
         "unet": {"class_type": "UNETLoader",
@@ -65,8 +66,8 @@ def build_graph(args, *, enabled: bool) -> dict:
                    "inputs": {"noise": ["noise", 0], "guider": ["guider", 0],
                               "sampler": ["sampler", 0], "sigmas": ["sigmas", 0],
                               "latent_image": ["cond", 1]}},
-        # SaveLatent nie obsluguje latentu H3 (NestedTensor: wideo i audio
-        # spakowane razem), wiec porownanie idzie po zdekodowanych klatkach.
+        # SaveLatent cannot handle the H3 latent (a NestedTensor with video and
+        # audio packed together), so we compare decoded frames instead.
         "decode": {"class_type": "VAEDecode",
                    "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
         "save": {"class_type": "SaveImage",
@@ -98,7 +99,7 @@ def run_once(base: str, graph: dict, label: str, timeout: float) -> dict:
     started = time.perf_counter()
     result = post(f"{base}/prompt", {"prompt": graph, "client_id": client})
     prompt_id = result["prompt_id"]
-    print(f"[{label}] zakolejkowane, prompt_id={prompt_id}", flush=True)
+    print(f"[{label}] queued, prompt_id={prompt_id}", flush=True)
 
     deadline = started + timeout
     while time.perf_counter() < deadline:
@@ -108,25 +109,25 @@ def run_once(base: str, graph: dict, label: str, timeout: float) -> dict:
             elapsed = time.perf_counter() - started
             status = entry["status"]
             if not status.get("completed"):
-                raise RuntimeError(f"[{label}] wykonanie nieudane: "
+                raise RuntimeError(f"[{label}] execution failed: "
                                    f"{json.dumps(status)[:800]}")
             return {"label": label, "wall_s": elapsed, "prompt_id": prompt_id,
                     "outputs": entry.get("outputs", {})}
         time.sleep(1.0)
-    raise TimeoutError(f"[{label}] przekroczono {timeout:.0f} s")
+    raise TimeoutError(f"[{label}] timed out after {timeout:.0f} s")
 
 
 def compare_frames(off: dict, on: dict) -> None:
-    """PSNR miedzy klatkami obu wariantow.
+    """PSNR between the frames of both variants.
 
-    Sol-Attn to aproksymacja, wiec identycznosci nie oczekujemy — chodzi o to,
-    czy trajektoria pozostala rozpoznawalnie ta sama.
+    Sol-Attn is an approximation, so identity is not expected — the question is
+    whether the trajectory stayed recognizably the same.
     """
     try:
         import numpy as np
         from PIL import Image
     except ImportError as exc:
-        print(f"\nPorownanie klatek pominiete: {exc}")
+        print(f"\nFrame comparison skipped: {exc}")
         return
 
     root = pathlib.Path.home() / "comfyX" / "ComfyUI" / "output"
@@ -135,19 +136,19 @@ def compare_frames(off: dict, on: dict) -> None:
         x = np.asarray(Image.open(a), dtype=np.float64)
         y = np.asarray(Image.open(b), dtype=np.float64)
         if x.shape != y.shape:
-            print(f"\nPorownanie klatek pominiete: rozne ksztalty {x.shape} vs {y.shape}")
+            print(f"\nFrame comparison skipped: shape mismatch {x.shape} vs {y.shape}")
             return
         mse = float(((x - y) ** 2).mean())
         psnr = float("inf") if mse == 0 else 10 * math.log10(255.0 ** 2 / mse)
         pairs.append((psnr, float(np.abs(x - y).max())))
     if not pairs:
-        print("\nPorownanie klatek pominiete: brak zapisanych klatek")
+        print("\nFrame comparison skipped: no frames were saved")
         return
     psnrs = [p for p, _ in pairs]
-    print(f"\nPorownanie klatek off vs on ({len(pairs)} klatek):")
-    print(f"  PSNR: min={min(psnrs):.2f} dB  sredni={sum(psnrs) / len(psnrs):.2f} dB  "
+    print(f"\nFrame comparison, off vs on ({len(pairs)} frames):")
+    print(f"  PSNR: min={min(psnrs):.2f} dB  mean={sum(psnrs) / len(psnrs):.2f} dB  "
           f"max={max(psnrs):.2f} dB")
-    print(f"  najwieksza roznica na pikselu: {max(d for _, d in pairs):.0f}/255")
+    print(f"  largest per-pixel difference: {max(d for _, d in pairs):.0f}/255")
 
 
 def _frames(result: dict, root: pathlib.Path):
@@ -177,9 +178,9 @@ def main() -> None:
     parser.add_argument("--strict", action="store_true", default=False)
     parser.add_argument("--timeout", type=float, default=5400)
     parser.add_argument("--cache", action="store_true",
-                        help="wepnij MiniMaxH3Cache za wezlem — test kompozycji")
+                        help="chain MiniMaxH3Cache after the node - composition test")
     parser.add_argument("--only", choices=["on", "off"], default=None,
-                        help="uruchom tylko jeden wariant")
+                        help="run only one variant")
     args = parser.parse_args()
 
     base = f"http://127.0.0.1:{args.port}"
@@ -190,19 +191,19 @@ def main() -> None:
     results = []
     for label, enabled in variants:
         results.append(run_once(base, build_graph(args, enabled=enabled), label, args.timeout))
-        print(f"[{label}] czas end-to-end: {results[-1]['wall_s']:.1f} s", flush=True)
+        print(f"[{label}] end-to-end time: {results[-1]['wall_s']:.1f} s", flush=True)
 
-    print("\n=== WYNIK ===")
+    print("\n=== RESULT ===")
     for row in results:
         print(f"{row['label']:>4}: {row['wall_s']:8.1f} s   {json.dumps(row['outputs'])[:200]}")
     if len(results) == 2:
         off, on = results[0]["wall_s"], results[1]["wall_s"]
         print(f"\nend-to-end: {off / on:.3f}x "
-              f"({'szybciej' if on < off else 'wolniej'} z nodem)")
+              f"({'faster' if on < off else 'slower'} with the node)")
     if len(results) == 2:
         compare_frames(results[0], results[1])
-    print("\nCzas samej uwagi i statystyki routingu sa w logu ComfyUI "
-          "(linie [sol-attn-h3]).")
+    print("\nAttention time and routing statistics are in the ComfyUI log "
+          "([sol-attn-h3] lines).")
 
 
 if __name__ == "__main__":

@@ -220,17 +220,16 @@ The node logs three things, all aimed at catching a configuration that asks for
 sparse attention and quietly computes dense:
 
 ```
-[sol-attn-h3] SM89, CuTe DSL niedostepny, backend=triton, blokow DiT: 50
-[sol-attn-h3] gate poprawnosci PASS max_abs=0.12500 mean_abs=0.000303 rel_l2=0.00110
-              ref_max=33.000 max_rel=0.00379 limity={'max_rel': 0.02, ...}
-[sol-attn-h3] gestosc routingu {'blocks': 274, 'sink_blocks': 8,
-              'threshold_density': 0.22587, 'effective_density': 0.25761}
+[sol-attn-h3] SM89, CuTe DSL unavailable, backend=triton, DiT blocks: 50
+[sol-attn-h3] correctness gate PASS max_abs=0.12500 mean_abs=0.000305 rel_l2=0.00111
+              ref_max=33.000 max_rel=0.00379 over_1e2=4.14e-03
+              limits={'max_rel': 0.02, 'mean_abs': 0.002, 'rel_l2': 0.005}
+[sol-attn-h3] routing density {'blocks': 87, 'sink_blocks': 5,
+              'threshold_density': 0.24153, 'effective_density': 0.30748}
 [sol-attn-h3] {'backend': 'triton', 'sparse_calls': 288, 'dense_calls': 112,
-              'attn_ms_per_call': {'sparse': 47.87, 'dense': 113.32, ...}, ...}
+              'sparse_fraction': 0.72,
+              'attn_ms_per_call': {'sparse': 7.29, 'dense': 12.09, ...}, ...}
 ```
-
-*(Runtime log strings are currently Polish; the metric names are the parts that
-matter.)*
 
 - **correctness gate** — once per shape; `tau=-1000` admits every block, so the
   comparison against SDPA measures the kernel's arithmetic, not the routing policy

@@ -1,12 +1,13 @@
-"""Sol-Attn dla MiniMax-H3 w ComfyUI.
+"""Sol-Attn for MiniMax-H3 in ComfyUI.
 
-Poza ComfyUI ten pakiet importuje sie do pustych mapowan zamiast wybuchac na
-braku `comfy` — inaczej pytest, ktory tworzy kolektor Package dla katalogu repo
-(ma `__init__.py`, bo tego wymaga ComfyUI), przewracalby cala suite.
+Outside ComfyUI this package imports to empty mappings instead of blowing up on
+a missing `comfy` — otherwise pytest, which builds a Package collector for the
+repo directory (it has an __init__.py because ComfyUI requires one), would take
+down the whole suite.
 
-Lapany jest wylacznie brak samego `comfy`. Kazdy inny ImportError — literowka w
-nazwie modulu, brakujaca zaleznosc, blad w `nodes.py` — propaguje, zeby wewnatrz
-ComfyUI nie zamienil sie w cicho pusta liste wezlow.
+Only a missing `comfy` is caught. Any other ImportError — a typo in a module
+name, a missing dependency, a bug in `nodes.py` — propagates, so that inside
+ComfyUI it never turns into a silently empty node list.
 """
 try:
     from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS

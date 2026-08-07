@@ -1,290 +1,294 @@
-# Sol-Attn dla MiniMax-H3 w ComfyUI — design
+# Sol-Attn for MiniMax-H3 in ComfyUI — design
 
-Data: 2026-08-06
-Status: zatwierdzony do rozpisania planu implementacji
+Date: 2026-08-06
+Status: approved; implementation plan written and executed
 
-## 1. Cel
+## 1. Goal
 
-Wpiąć Sol-Attn — training-free rzadką uwagę z NVIDIA Sol Engine — w natywną
-implementację MiniMax-H3 w ComfyUI, jako opcjonalny custom node.
+Wire Sol-Attn — the training-free sparse attention from NVIDIA Sol Engine — into
+ComfyUI's native MiniMax-H3 implementation, as an optional custom node.
 
-Sol Engine składa pięć technik akceleracji. Dla H3 zwalidowana linia to
-context parallelism + fuzje kerneli + Sol-Attn + FirstBlockCache. Z tego
-zestawu w tej instalacji brakuje wyłącznie Sol-Attn:
+Sol Engine composes five acceleration techniques. For H3 the validated line is
+context parallelism + kernel fusion + Sol-Attn + FirstBlockCache. Of that set,
+only Sol-Attn was missing from this installation:
 
-| Filar Sol Engine | Stan w `~/comfyX/ComfyUI` |
+| Sol Engine pillar | Status in `~/comfyX/ComfyUI` |
 |---|---|
-| Cross-step cache | `ComfyUI-MiniMaxH3-Cache`, alternatywnie `ComfyUI-Spectrum-MiniMax-H3` |
-| Kwantyzacja / fuzje kerneli | `int8-fast` + wagi `minimax_h3_*_pruned_int8_convrot` |
-| **Rzadka uwaga (Sol-Attn)** | **brak — zakres tego dokumentu** |
-| Context parallelism | nie dotyczy (pojedyncze GPU) |
+| Cross-step cache | `ComfyUI-MiniMaxH3-Cache`, or `ComfyUI-Spectrum-MiniMax-H3` |
+| Quantization / kernel fusion | `int8-fast` plus `minimax_h3_*_pruned_int8_convrot` weights |
+| **Sparse attention (Sol-Attn)** | **missing — the scope of this document** |
+| Context parallelism | not applicable (single GPU) |
 
-## 2. Zakres
+## 2. Scope
 
-W zakresie:
+In scope:
 
-- jeden custom node `SolAttnH3` (MODEL → MODEL) wpinający Sol-Attn w H3
-- automatyczny wybór backendu kernela wg architektury GPU
-- degradacja do gęstej uwagi z jawnym, liczonym powodem
-- gate poprawności i sonda gęstości routingu
-- skrypt selftestu do uruchomienia na maszynie docelowej
+- one custom node `SolAttnH3` (MODEL → MODEL) that wires Sol-Attn into H3
+- automatic kernel-backend selection by GPU architecture
+- graceful degradation to dense attention with an explicit, counted reason
+- a correctness gate and a routing-density probe
+- a selftest script to run on the target machine
 
-Poza zakresem:
+Out of scope:
 
-- inne modele wideo (WAN, HunyuanVideo, LTX) — Sol-Engine ma dla nich
-  zwalidowane linie, ale każdy ma inny layout sekwencji i inne miejsce na sink
-- własna implementacja cache lub fuzji kerneli (już pokryte)
-- autotuning `tau`
-- współpraca z `torch.compile` (override to callable w `transformer_options`,
-  więc wystąpi graph-break — do odnotowania w README, nie do naprawy w v1)
-- publikacja node'a (możliwa później; v1 celuje w działanie u autora)
+- other video models (WAN, HunyuanVideo, LTX) — Sol-Engine has validated lines
+  for them, but each has a different sequence layout and a different place for
+  the sink
+- our own cache or kernel-fusion implementation (already covered)
+- `tau` autotuning
+- `torch.compile` interoperability (the override is a callable in
+  `transformer_options`, so a graph break occurs — note it in the README, do not
+  fix it now)
+- publishing the node (possible later; v1 targets working on the author's setup)
 
-## 3. Środowisko
+## 3. Environment
 
-Maszyna deweloperska (build + testy poprawnościowe):
+Development machine (build and correctness testing):
 
-- ComfyUI v0.30.1 w `~/comfyX/ComfyUI`, venv z Pythonem 3.13
-- torch 2.12.0+cu130, Triton 3.7.0, obecne `sageattention` i `flash_attn`
-- RTX 4070 Ti 12 GB — **SM89 → backend Triton**
-- 62 GB RAM, wagi H3: DiT int8 20 GB, `qwen3vl_4b_fp8` 4,9 GB jako lekki encoder
+- ComfyUI v0.30.1 in `~/comfyX/ComfyUI`, a Python 3.13 venv
+- torch 2.12.0+cu130, Triton 3.7.0, `sageattention` and `flash_attn` present
+- RTX 4070 Ti 12 GB — **SM89 → Triton backend**
+- 62 GB RAM; H3 weights: 20 GB int8 DiT, 4.9 GB `qwen3vl_4b_fp8` as a light encoder
 
-Maszyna docelowa (generowanie):
+Target machine (generation):
 
-- RTX PRO 6000 Blackwell — **SM120 → backend CuTe DSL**
-- node musi degradować się poprawnie na słabsze karty konsumenckie
+- RTX PRO 6000 Blackwell — **SM120 → CuTe DSL backend**
+- the node must degrade correctly on weaker consumer cards
   (Ada SM89, Ampere SM86/SM80 → Triton)
 
-Wymagania kernela `sol-attn` 0.5.0 są spełnione na obu: Python ≥3.10,
-torch ≥2.10, CUDA ≥12.8, Triton ≥3.6.
+The `sol-attn` 0.5.0 requirements hold on both: Python ≥3.10, torch ≥2.10,
+CUDA ≥12.8, Triton ≥3.6.
 
-## 4. Zgodność kontraktów
+## 4. Contract compatibility
 
-Kontrakt kernela (`sol_attn/interface.py::_validate_inputs`) kontra to, co
-podaje ComfyUI w `comfy/ldm/minimax/model.py`:
+The kernel's contract (`sol_attn/interface.py::_validate_inputs`) against what
+ComfyUI provides in `comfy/ldm/minimax/model.py`:
 
-| Wymóg kernela | H3 w ComfyUI | Wynik |
+| Kernel requirement | H3 in ComfyUI | Verdict |
 |---|---|---|
-| head_dim == 128 | `attention_head_dim=128` (`model.py:414`) | zgodne |
-| dtype bfloat16 | `supported_inference_dtypes = [bfloat16, float32]` (`supported_models.py:973`) | zgodne |
-| contiguous BTHD | podawane BHSD, wymaga jednej kopii | kopia konieczna |
-| brak maski | `mask=None` (`model.py:181`) | zgodne |
-| compute capability ≥ 8.0 | zależne od maszyny | sprawdzane w runtime |
+| head_dim == 128 | `attention_head_dim=128` (`model.py:414`) | matches |
+| dtype bfloat16 | `supported_inference_dtypes = [bfloat16, float32]` (`supported_models.py:973`) | matches |
+| contiguous BTHD | supplied as BHSD, needs one copy | copy required |
+| no mask | `mask=None` (`model.py:181`) | matches |
+| compute capability ≥ 8.0 | machine-dependent | checked at runtime |
 
-Kopia BTHD: przy ~31 tys. wierszy to 3 × 444 MB. Referencja NVIDII mierzy
-analogiczną kopię na <0,1 ms przeciw 6,7 ms uwagi.
+The BTHD copy is 3 × 424 MiB at ~31 k rows. NVIDIA's reference measures an
+equivalent copy at <0.1 ms against 6.7 ms of attention.
 
-## 5. Punkty wpięcia
+## 5. Integration points
 
-Wszystkie wspierane — bez patchowania plików core ComfyUI.
+All supported — no ComfyUI core file is patched.
 
-| Mechanizm | Miejsce | Rola |
+| Mechanism | Location | Role |
 |---|---|---|
-| `transformer_options["optimized_attention_override"]` | `comfy/ldm/modules/attention.py:148` (`wrap_attn`) | przechwycenie uwagi; `func(*args, **kwargs)` daje gęsty fallback |
-| `WrappersMP.DIFFUSION_MODEL` | `comfy/ldm/minimax/model.py:502` | raz na forward: layout, sink, numer kroku, reset warstw |
-| `patches_replace["dit"][("double_block", i)]` | `comfy/ldm/minimax/model.py:620` | stemplowanie prawdziwego indeksu bloku |
+| `transformer_options["optimized_attention_override"]` | `comfy/ldm/modules/attention.py:148` (`wrap_attn`) | intercept attention; `func(*args, **kwargs)` gives the dense fallback |
+| `WrappersMP.DIFFUSION_MODEL` | `comfy/ldm/minimax/model.py:502` | once per forward: layout, sink, step index, layer reset |
+| `patches_replace["dit"][("double_block", i)]` | `comfy/ldm/minimax/model.py:620` | stamp the real block index |
 
-API ModelPatcher: `clone()`, `add_wrapper_with_key()`, `set_model_patch_replace(patch, "dit", "double_block", i)`.
+ModelPatcher API: `clone()`, `add_wrapper_with_key()`,
+`set_model_patch_replace(patch, "dit", "double_block", i)`.
 
-## 6. Architektura
+## 6. Architecture
 
 ```
-~/sol/                          # repo, symlink → custom_nodes/ComfyUI-SolAttn-H3
-├── __init__.py    # NODE_CLASS_MAPPINGS dla ComfyUI
-├── nodes.py       # węzeł SolAttnH3 — wyłącznie UI i montaż
-├── state.py       # zegar kroku/warstwy, powody odmowy, liczniki
-├── layout.py      # zakres sinka z layout.segments (czysta funkcja)
-├── kernel.py      # leniwy import sol_attn, wykrycie i raport backendu
-├── attention.py   # adapter override: kontrakt, kernel, dense fallback
-├── selftest.py    # samodzielny skrypt diagnostyczny (maszyna docelowa)
-└── tests/         # testy jednostkowe bez GPU
+~/sol/                          # repo, symlinked as custom_nodes/ComfyUI-SolAttn-H3
+├── __init__.py    # NODE_CLASS_MAPPINGS for ComfyUI
+├── nodes.py       # the SolAttnH3 node — UI and mounting only
+├── state.py       # step/layer clock, decline reasons, counters
+├── layout.py      # sink range from layout.segments (a pure function)
+├── kernel.py      # lazy sol_attn import, backend detection and reporting
+├── attention.py   # the override adapter: contract, kernel, dense fallback
+├── selftest.py    # standalone diagnostic script (target machine)
+└── tests/         # CUDA-free unit tests
 ```
 
-Podział podyktowany testowalnością: `layout.py` i `state.py` nie dotykają CUDA
-i idą pod testy jednostkowe. `attention.py` i `kernel.py` wymagają GPU.
+The split is driven by testability: `layout.py` and `state.py` never touch CUDA
+and take unit tests. `attention.py` and `kernel.py` need a GPU.
 
-### Przepływ jednego kroku samplera
+### Flow of one sampler step
 
-1. Wrapper `DIFFUSION_MODEL` — raz na forward:
-   - czyta `minimax_payload["layout"]`
-   - sink = `(0, start segmentu "video")` dla `sink_mode="prefix"`
-   - numer kroku = pozycja `timestep` w `transformer_options["sample_sigmas"]`
-   - zeruje licznik warstw
-2. `patches_replace["dit"][("double_block", i)]` — 50×: stempluje
-   `transformer_options["solattn_block"] = i`, woła oryginalny blok
-3. `Attention.forward` → `optimized_attention` → `wrap_attn` → adapter:
-   - odmowa → `func(*args, **kwargs)`
-   - zgoda → BHSD→BTHD contiguous bf16 → `sol_attn(...)` z sinkiem →
-     gęste przeliczenie wierszy-zapytań prefiksu → `reshape(1, s, heads*128)`
+1. The `DIFFUSION_MODEL` wrapper — once per forward:
+   - reads `minimax_payload["layout"]`
+   - sink = `(0, start of the "video" segment)` for `sink_mode="prefix"`
+   - step index = position of `timestep` in `transformer_options["sample_sigmas"]`
+   - resets the layer counter
+2. `patches_replace["dit"][("double_block", i)]` — 50×: stamps
+   `transformer_options["solattn_block"] = i`, calls the original block
+3. `Attention.forward` → `optimized_attention` → `wrap_attn` → the adapter:
+   - decline → `func(*args, **kwargs)`
+   - accept → BHSD→BTHD contiguous bf16 → `sol_attn(...)` with the sink →
+     dense recomputation of the prefix query rows → `reshape(1, s, heads*128)`
 
-### Odejścia od referencji NVIDII
+### Divergences from NVIDIA's reference
 
-Oba wynikają z tego, że ComfyUI udostępnia informacje, których nie miał
-runtime SGLang użyty w `models/minimax_h3/optimized/sol_attn_h3.py`.
+Both follow from ComfyUI exposing information the SGLang runtime used in
+`models/minimax_h3/optimized/sol_attn_h3.py` did not have.
 
-**Numer kroku z harmonogramu, nie z kierunku timestepu.** Referencja wykrywa
-początek requestu po odwróceniu kierunku zmian timestepu i dokumentuje dwie
-wpadki na tym mechanizmie: reset, który nie odpalał wcale (pomiar zaczynał się
-od kroku 49 i biegł w pełni rzadko, raportując dziesięć kroków gęstych), oraz
-reset odpalający co krok (wszystko odmawiało jako `warmup_step`, obie
-konfiguracje mierzyły gęstą uwagę pod etykietą rzadkiej). `sample_sigmas` daje
-numer kroku wprost.
+**Step index from the schedule, not from the direction of timestep change.** The
+reference detects the start of a request by watching for a reversal in timestep
+direction, and documents two failures on that mechanism: a reset that never
+fired (measurement started at step 49 and ran fully sparse while reporting ten
+dense steps), and a reset that fired every step (everything declined as
+`warmup_step`, so both configurations measured dense attention under a sparse
+label). `sample_sigmas` gives the step index directly.
 
-**Sink z jawnych segmentów.** Referencja wnioskuje początek ogona wideo z
-nieciągłości `video_indices`. `PackedLayout.segments` podaje etykietowane
-`(a, b, kind)` dla `text / cond / ref_img / audio / video`.
+**Sink from explicit segments.** The reference infers the start of the video tail
+from discontinuities in `video_indices`. `PackedLayout.segments` provides
+labelled `(a, b, kind)` tuples for `text / cond / ref_img / audio / video`.
 
-**Indeks bloku stemplowany, nie liczony.** `token_refiner` (`model.py:584`)
-również woła `Attention` z head_dim 128, na samych wierszach tekstu. Liczenie
-wywołań przesunęłoby `first_dense_layers`. Refiner odpada też na sprawdzeniu
-długości sekwencji, ale poprawność nie ma zależeć od dwóch mechanizmów naraz.
+**Block index stamped, not counted.** `token_refiner` (`model.py:584`) also calls
+`Attention` with head_dim 128, on the text rows alone. Counting calls would shift
+`first_dense_layers`. The refiner also falls out on the sequence-length check,
+but correctness must not depend on two mechanisms at once.
 
-## 7. Polityka sparse
+## 7. Sparse policy
 
-Wartości domyślne z zwalidowanej linii H3:
+Defaults from the validated H3 line:
 
-| Parametr | Domyślnie | Uzasadnienie |
+| Parameter | Default | Rationale |
 |---|---|---|
-| `enabled` | włączony | jeden przełącznik wyłączający całość bez przebudowy grafu |
-| `tau` | 1.0 | referencja przekazuje wprost; jej wcześniejsza kalibracja per-kształt zwracała pusty zbiór tras na H3 i konfiguracja po cichu leciała gęsto |
-| `thresh_type` | `diag` | `exact` = próg pełnokowariancyjny, droższy |
-| `first_dense_steps` | 0.2 harmonogramu | patrz niżej |
-| `first_dense_layers` | 2 | liczone od zera |
-| `sink_mode` | `prefix` | patrz niżej |
-| `correctness_gate` | włączony | |
-| `strict` | wyłączony | |
+| `enabled` | on | one switch that disables everything without rewiring the graph |
+| `tau` | 1.0 | the reference passes it directly; its earlier per-shape calibration returned an empty route set on H3 and the configuration silently ran dense |
+| `thresh_type` | `diag` | `exact` is the full-covariance threshold, more expensive |
+| `first_dense_steps` | 0.2 of the schedule | see below |
+| `first_dense_layers` | 2 | counted from zero |
+| `sink_mode` | `prefix` | see below |
+| `correctness_gate` | on | |
+| `strict` | off | |
 
-**`first_dense_steps` jako ułamek.** Referencyjne `10` pochodzi z harmonogramu
-50-krokowego. Przy 20 krokach oznaczałoby połowę przebiegu gęsto. Znając
-`sample_sigmas` interpretujemy wartość <1 jako ułamek długości harmonogramu,
-wartość ≥1 jako sztywną liczbę kroków.
+**`first_dense_steps` as a fraction.** The reference's `10` comes from a 50-step
+schedule. At 20 steps that would mean running half the schedule dense. Since
+`sample_sigmas` is available, a value below 1 is interpreted as a fraction of the
+schedule and a value of 1 or more as a fixed step count.
 
-**`sink_mode="prefix"`, nie `text`.** Sink obejmuje tekst, wiersze
-warunkujące i audio — wszystko przed ogonem wideo. Wiersze audio są
-generowane (model zwraca dla nich prędkość), a handoff NVIDII odnotował
-prompt, w którym obraz wyszedł najlepiej w zestawie, podczas gdy dialog się
-rozpadł. Koszt wobec polityki referencyjnej: ~1% gęstości i ~1% dodatkowych
-gęstych wierszy-zapytań. `text` pozostaje dostępny do odtworzenia referencji.
+**`sink_mode="prefix"`, not `text`.** The sink covers text, conditioning rows and
+audio — everything before the video tail. The audio rows are generated (the model
+returns a velocity for them), and NVIDIA's handoff recorded a prompt whose
+picture scored best of its set while its dialogue fell apart. Cost against the
+reference policy: about 1 % density and 1 % additional dense query rows. `text`
+remains available to reproduce the reference exactly.
 
-**Sink dotyczy kluczy, nie zapytań.** Kernel czyni zakres sinka dokładnym jako
-K/V, ale jego własne wiersze-zapytania nadal routują się rzadko. README
-kernela jest jednoznaczne, że integracja MMDiT musi przeliczyć je gęsto.
-Dokładność stosowana jest z granulacją bloków 64-tokenowych, zaokrąglając na
-zewnątrz.
+**The sink applies to keys, not queries.** The kernel makes the sink range exact
+as K/V, but its own query rows still route sparsely. The kernel's README is
+explicit that an MMDiT integration must recompute them densely. Exactness is
+applied at 64-token block granularity, rounding outward.
 
-**Kompozycja z cache.** Sol-Engine dla H3 składa Sol-Attn z FirstBlockCache,
-więc współpraca z `ComfyUI-MiniMaxH3-Cache` jest zamierzona. Gdy cache pominie
-krok, wrapper po prostu się nie odpali; zegar oparty o `sample_sigmas`
-pozostaje poprawny, licznik wywołań by się rozjechał.
+**Composition with a cache.** Sol-Engine's H3 line composes Sol-Attn with
+FirstBlockCache, so working alongside `ComfyUI-MiniMaxH3-Cache` is intended. When
+the cache skips a step, the wrapper simply does not fire; the `sample_sigmas`
+clock stays correct where a call counter would drift.
 
-## 8. Obsługa błędów
+## 8. Error handling
 
-Zasada: konfiguracja, która poprosiła o rzadką uwagę i po cichu dostała
-gęstą, to błędny pomiar w prawidłowej etykiecie. Każda odmowa niesie powód,
-nie boolean.
+Principle: a configuration that asked for sparse attention and quietly got dense
+is a wrong measurement wearing the right label. Every decline carries a reason,
+not a boolean.
 
-| Powód | Zachowanie |
+| Reason | Behaviour |
 |---|---|
-| `warmup_step`, `dense_layer` | zamierzone — cicho, tylko licznik |
-| `disabled` | zamierzone — przełącznik `enabled` wyłączony, cicho |
-| `no_layout` | wrapper nie zobaczył `minimax_payload["layout"]` — log raz |
-| `seq_mismatch` | `token_refiner` i wszystko nieoczekiwane — log raz |
-| `dtype`, `head_dim`, `mask_present` | kontrakt kernela — log raz |
-| `arch_unsupported` (<SM80), `kernel_import` | log raz przy montażu |
-| `kernel_error` | wyjątek z kernela → gęsto, log z tracebackiem raz |
-| `oom` | zatrzaskuje gęsto do końca przebiegu |
+| `warmup_step`, `dense_layer` | intended — silent, counted only |
+| `disabled` | intended — the `enabled` switch is off, silent |
+| `no_layout` | the wrapper never saw `minimax_payload["layout"]` — logged once |
+| `seq_mismatch` | `token_refiner` and anything unexpected — logged once |
+| `dtype`, `head_dim`, `mask_present` | kernel contract — logged once |
+| `arch_unsupported` (<SM80), `kernel_import` | logged once at mount |
+| `kernel_error` | exception from the kernel → dense, traceback logged once |
+| `oom` | latches onto dense for the rest of the run |
 
-**Kontrola zbiorcza na koniec przebiegu.** Jeśli sampling przekroczył
-`first_dense_steps` i nie wykonał ani jednego wywołania rzadkiego — głośny
-warning. Powody per-call tego nie wyłapią, bo powód, który robi szkodę
-(`warmup_step`), jest sam w sobie legalny. Błąd istnieje tylko w agregacie.
+**Aggregate check at end of run.** If sampling passed `first_dense_steps` and made
+not a single sparse call — a loud warning. Per-call reasons cannot catch this,
+because the reason that does the damage (`warmup_step`) is itself legitimate. The
+error exists only in aggregate, so the check must be in aggregate too.
 
-`strict=True` zamienia każdy niezamierzony powód w wyjątek. Do walidacji, nie
-do codziennej pracy.
+`strict=True` turns every unintended reason into an exception. For validation,
+not for daily use.
 
-**Gate poprawności** — raz na kształt sekwencji. `tau=-1000` przepuszcza
-wszystkie bloki, więc porównanie z SDPA mierzy arytmetykę kernela, nie
-politykę routingu. Na prawdziwych QKV i wszystkich głowach: próba na losowych
-tensorach odpowiada na pytanie o kernel, nie o ten model przy tym kształcie.
-Gate na produkcyjnej liczbie głów rozgrzewa też autotuning Tritona w
-`preprocess.prepare`, który kluczuje po samym `T` — pierwsze wywołanie przy
-jednej głowie zapisałoby konfigurację dobraną dla siatki jednogłowowej.
+**Correctness gate** — once per sequence shape. `tau=-1000` admits every block, so
+the comparison against SDPA measures the kernel's arithmetic, not the routing
+policy. On real QKV and all heads: a probe on random tensors answers a question
+about the kernel, not about this model at this shape. Running the gate at the
+production head count also warms Triton's autotuning in `preprocess.prepare`,
+which keys on `T` alone — a first call at one head would cache a configuration
+chosen for a single-head grid.
 
-Progi: `max_rel ≤ 0,02`, `mean_abs ≤ 0,002`, `rel_l2 ≤ 0,005`. Fail → wyjątek;
-cicha akceptacja zepsutego kernela jest gorsza niż brak przyspieszenia.
+Limits: `max_rel ≤ 0.02`, `mean_abs ≤ 0.002`, `rel_l2 ≤ 0.005`. A failure raises;
+silently accepting a broken kernel is worse than no speedup.
 
-**Odstępstwo od referencji, ustalone pomiarem.** Pierwotnie przyjęto progi
-NVIDII w całości, w tym bezwzględny `max_abs ≤ 0,08` (albo 0,15 powyżej 32k
-tokenów). Pierwszy przebieg na prawdziwym H3 go nie przeszedł: `max_abs = 0,125`
-przy `mean_abs = 0,000305` (6,5× zapasu) i `rel_l2 = 0,00111` (4,5× zapasu).
+**Divergence from the reference, established by measurement.** The original design
+adopted NVIDIA's limits wholesale, including the absolute `max_abs ≤ 0.08` (or
+0.15 above 32 k tokens). The first run on real H3 failed it: `max_abs = 0.125`
+with `mean_abs = 0.000305` (6.5× headroom) and `rel_l2 = 0.00111` (4.5× headroom).
 
-Sprawdzone dwie hipotezy:
+Two hypotheses were tested:
 
-1. *Niepełny ostatni blok* — `T = 5548` to 86 pełnych bloków po 64 plus 44,
-   a wszystkie kształty w spike'u były wielokrotnościami 64. Obalone: ten sam
-   `T` na tensorach syntetycznych daje `max_abs = 0,00012`, identycznie jak
-   kształty pełnoblokowe.
-2. *Skala aktywacji* — potwierdzone. Zmierzone `ref_max = 33,0`. bf16 ma 7 bitów
-   mantysy, więc dla `|x| ∈ [32, 64)` ulp wynosi `32·2⁻⁷ = 0,25`, a granica
-   poprawnego zaokrąglenia to pół ulpa, czyli **dokładnie 0,125**. Najgorszy
-   element był teoretycznym minimum błędu reprezentacji przy tej skali.
+1. *Partial last block* — `T = 5548` is 86 full 64-token blocks plus 44, whereas
+   every shape in the spike was a multiple of 64. Disproved: the same `T` on
+   synthetic tensors gives `max_abs = 0.00012`, identical to full-block shapes.
+2. *Activation scale* — confirmed. Measured `ref_max = 33.0`. bfloat16 has
+   7 mantissa bits, so for `|x| ∈ [32, 64)` one ulp is `32·2⁻⁷ = 0.25` and the
+   correct-rounding bound is half an ulp, i.e. **exactly 0.125**. The worst
+   element was the theoretical minimum representation error at that magnitude.
 
-Wniosek: nie próg był za ciasny, tylko kryterium nieprzenośne — bezwzględny
-limit w przestrzeni wyjścia zakłada rozkład aktywacji, na którym go zmierzono.
-Zmienione zostało **wyłącznie** kryterium maksimum, na względne
-`max_rel = max_abs / ref_max`. `mean_abs` i `rel_l2` pozostają dokładnie takie,
-jakie ustawiła NVIDIA. Trzy testy pilnują, że rozluźnienie nie rozbroiło gate'u:
-odrzucenie kernela zaburzonego o 5%, przepuszczenie idealnego i niezależność
-werdyktu od skali wyjścia.
+Conclusion: the threshold was not too tight, the criterion was non-transferable —
+an absolute limit in output space assumes the activation distribution it was
+measured on. **Only** the maximum criterion changed, to the relative
+`max_rel = max_abs / ref_max`. `mean_abs` and `rel_l2` remain exactly as NVIDIA
+set them. Three tests guard against the loosening having disarmed the gate:
+rejection of a kernel perturbed by 5 %, acceptance of a perfect one, and
+independence of the verdict from output scale.
 
-**Sonda gęstości** — raz. Raportuje `threshold_density` i `effective_density`.
-Gęstość bliska 1,0 znaczy, że routing nie routuje; 0,0 — że się zapadł.
+**Density probe** — once. Reports `threshold_density` and `effective_density`. A
+density near 1.0 means the routing is not routing; 0.0 means it collapsed.
 
-## 9. Plan walidacji
+Two things deliberately left out of v1: `torch.compile` interaction (the override
+is a callable in `transformer_options`, so a graph break occurs — note it in the
+README rather than fix it) and any form of `tau` autotuning.
 
-**Krok 0 — spike instalacyjny, przed pisaniem node'a.**
-`pip install -e techniques/sparse_backends` do venva comfyX, potem samodzielny
-skrypt wołający `sol_attn()` na syntetycznych tensorach w realnym kształcie
-(~31k × 56 × 128 bf16) kontra SDPA. Odpowiada na cztery pytania unieważniające
-resztę planu: czy Triton się kompiluje, czy gate przechodzi, jaka wychodzi
-gęstość, ile kosztują kopie contiguous.
+## 9. Validation plan
 
-**Krok 1 — testy jednostkowe, bez GPU.** Wyłącznie tam, gdzie chronią przed
-cichą regresją — czyli w trzech miejscach, w których referencja miała
-udokumentowane wpadki:
+**Step 0 — installation spike, before writing the node.**
+`pip install -e techniques/sparse_backends` into the comfyX venv, then a
+standalone script calling `sol_attn()` on synthetic tensors at the real shape
+(~31 k × 56 × 128 bf16) against SDPA. It answers the four questions that would
+invalidate the rest of the plan: does Triton compile, does the gate pass, what
+density comes out, what do the contiguous copies cost.
 
-- `layout.py`: sink dla t2va, fl2va z keyframe'ami, ref2va z refs
-- `state.py`: zegar przy pominiętych krokach, reset między przebiegami,
-  off-by-one na `first_dense_layers`
-- tablica wyboru backendu per compute capability
+**Step 1 — unit tests, no GPU.** Only where they guard against silent regression —
+i.e. the three places where the reference had documented failures:
 
-**Krok 2 — integracja na prawdziwym H3, lokalnie.** ComfyUI headless,
-minimalny graf H3 w małej rozdzielczości, `strict=True`. Dowody:
+- `layout.py`: sink for t2va, fl2va with keyframes, ref2va with refs
+- `state.py`: the clock under skipped steps, reset between runs, the
+  `first_dense_layers` off-by-one
+- the backend-selection table per compute capability
 
-- gate PASS na prawdziwych QKV
-- `sparse_calls > 0` w mierzonym przebiegu
-- w `declined` wyłącznie zamierzone powody plus `seq_mismatch` z refinera
-- gęstość w sensownym paśmie, nie 1,0 i nie 0,0
-- A/B na tym samym seedzie: off vs on — różnica na zdekodowanych klatkach i czas
-- ten sam przebieg z włączonym `MiniMaxH3-Cache`
+**Step 2 — integration on real H3, locally.** Headless ComfyUI, a minimal H3 graph
+at low resolution, `strict=True`. Evidence to collect:
 
-**Czego ta maszyna nie udowodni:** numeryki i wydajności ścieżki CuTe SM120
-ani przyspieszenia w skali produkcyjnej. Stąd skrypt selftestu do uruchomienia
-na maszynie docelowej: wypisuje wybrany backend, wynik gate'u, gęstość i
-udział uwagi w czasie kroku.
+- `gate PASS` on real QKV
+- `sparse_calls > 0` in the measured run
+- `declined` containing only intended reasons plus `seq_mismatch` from the refiner
+- density inside (0, 1) — neither 1.0 (routing not routing) nor 0.0 (collapsed)
+- A/B at the same seed: off vs on — frame difference and wall clock
+- the same run with `MiniMaxH3-Cache` enabled
 
-## 10. Ryzyka
+**What this machine cannot prove:** the numerics and performance of the CuTe SM120
+path, or production-scale speedup. Hence the selftest script for the target
+machine: it prints the selected backend, the gate verdict, density, and
+attention's share of step time.
 
-| Ryzyko | Ocena |
+## 10. Risks
+
+| Risk | Assessment |
 |---|---|
-| Ścieżka Triton (Ada, Ampere) jest w README kernela opisana jako implementacja badawcza „for portability, kernel studies"; NVIDIA benchmarkowała SM90/100/120 | Na słabszych kartach Sol-Attn może wypaść gorzej od obecnego SageAttention. Node musi dać się wyłączyć jednym przełącznikiem i raportować backend. |
-| ~1,3 GB tymczasowych na kopie contiguous przy 31k wierszy | Bez znaczenia na PRO 6000 (96 GB), istotne na kartach 12–16 GB. Stąd zatrzask `oom`. |
-| Kompozycja z `MiniMaxH3-Cache`, który patchuje pliki core | Niesprawdzona. Testowana jawnie w kroku 2. |
-| Wersja ComfyUI | Wpięcie stoi na publicznych API, ale `PackedLayout.segments` i sygnatura `minimax_payload` to szczegóły implementacji H3. Kontrakt sprawdzany przy montażu, z jawnym błędem zamiast cichej degradacji. |
+| The Triton path (Ada, Ampere) is described in the kernel's README as a research implementation "for portability, kernel studies"; NVIDIA benchmarked SM90/100/120 | Sol-Attn may come out worse than the current SageAttention on weaker cards. The node must be switchable with one toggle and must report its backend. *(Disproved in practice: 1.09–1.34× against SageAttention across the sweep.)* |
+| ~1.3 GB of transients for contiguous copies at 31 k rows | Irrelevant on a PRO 6000 (96 GB), significant on 12–16 GB cards. Hence the `oom` latch. |
+| Composition with `MiniMaxH3-Cache`, which patches core files | Untested at design time. Verified explicitly in step 2. |
+| ComfyUI version | The integration rests on public APIs, but `PackedLayout.segments` and the `minimax_payload` signature are H3 implementation details. The contract is checked at mount, with an explicit error rather than silent degradation. |
 
-## 11. Licencja i atrybucja
+## 11. License and attribution
 
-Kernel `sol-attn` pochodzi z NVlabs/Sana (Apache-2.0) i jest **instalowany**,
-nie vendorowany — w v1 nie powstaje obowiązek redystrybucji. Integracja czerpie
-z `models/minimax_h3/optimized/sol_attn_h3.py` (Apache-2.0); README node'a
-wskazuje źródło, paper (arXiv 2607.24027) i licencję. Przy ewentualnej
-publikacji decyzję o vendorowaniu trzeba podjąć ponownie.
+The `sol-attn` kernel comes from NVlabs/Sana (Apache-2.0) and is **installed**,
+not vendored — v1 creates no redistribution obligation. The integration draws on
+`models/minimax_h3/optimized/sol_attn_h3.py` (Apache-2.0); the node's README
+points at the source, the paper (arXiv 2607.24027) and the license. If the node
+is ever published, the vendoring decision has to be revisited.

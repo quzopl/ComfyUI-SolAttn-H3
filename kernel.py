@@ -1,16 +1,16 @@
-"""Wykrycie architektury GPU, wybor backendu i leniwy import kernela sol_attn.
+"""GPU architecture detection, backend selection and lazy import of the kernel.
 
-Kernel wybiera backend sam, po `torch.cuda.get_device_capability()`. Ten modul
-odtwarza te decyzje po to, zeby dalo sie ja *zaraportowac* przed pierwszym
-wywolaniem i przetestowac bez GPU. Rozjazd wzgledem wydanego pakietu wychwytuje
-`test_tablica_zgodna_z_wydanym_kernelem`.
+`sol_attn()` picks its own backend from `torch.cuda.get_device_capability()`.
+This module reproduces that decision so it can be *reported* before the first
+call and tested without a GPU. Drift against the released package is caught by
+`test_table_matches_released_kernel`.
 """
 from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
 
-# Architektury z wydanym kernelem CuTe DSL. Reszta >= SM80 idzie na Tritona.
+# Architectures with a released CuTe DSL kernel. Everything else >= SM80 uses Triton.
 CUTE_BACKENDS = {
     (9, 0): "cute_sm90",     # H100
     (10, 0): "cute_sm100",   # B200 / GB200
@@ -21,7 +21,7 @@ TRITON = "triton"
 
 @dataclass(frozen=True)
 class Probe:
-    """Co wiadomo o tym GPU zanim kernel zostanie wywolany."""
+    """What is known about this GPU before the kernel is ever called."""
 
     arch: tuple[int, int] | None
     cute_available: bool
@@ -31,22 +31,22 @@ class Probe:
 
     def describe(self) -> str:
         if not self.available:
-            return f"niedostepny: {self.error}"
+            return f"unavailable: {self.error}"
         arch = f"SM{self.arch[0]}{self.arch[1]}"
-        cute = "CuTe DSL dostepny" if self.cute_available else "CuTe DSL niedostepny"
+        cute = "CuTe DSL available" if self.cute_available else "CuTe DSL unavailable"
         return f"{arch}, {cute}, backend={self.backend}"
 
 
 def backend_for_arch(arch: tuple[int, int], cute_available: bool) -> str:
-    """Backend, ktory `sol_attn()` wybierze dla tej architektury.
+    """The backend `sol_attn()` will pick for this architecture.
 
-    CuTe wygrywa tylko gdy architektura ma wyspecjalizowany kernel *i* runtime
-    da sie zaimportowac; inaczej Triton. Ponizej SM80 kernel nie ma zadnej
-    sciezki i podnosi wyjatek, wiec my tez.
+    CuTe wins only when the architecture has a specialized kernel *and* the
+    runtime imports; otherwise Triton. Below SM80 the kernel has no path at all
+    and raises, so we do too.
     """
     if arch[0] < 8:
         raise RuntimeError(
-            f"Sol-Attn wymaga compute capability >= 8.0; wykryto SM{arch[0]}{arch[1]}"
+            f"Sol-Attn requires compute capability >= 8.0; detected SM{arch[0]}{arch[1]}"
         )
     if cute_available and arch in CUTE_BACKENDS:
         return CUTE_BACKENDS[arch]
@@ -54,7 +54,7 @@ def backend_for_arch(arch: tuple[int, int], cute_available: bool) -> str:
 
 
 def cute_runtime_available() -> bool:
-    """Czy opcjonalny runtime CuTe DSL da sie zaimportowac."""
+    """Whether the optional CuTe DSL runtime can be imported."""
     try:
         import cuda.bindings.driver  # noqa: F401
         import cutlass.cute  # noqa: F401
@@ -65,21 +65,21 @@ def cute_runtime_available() -> bool:
 
 @functools.lru_cache(maxsize=None)
 def probe(device=None) -> Probe:
-    """Jednorazowe rozpoznanie srodowiska. Nie podnosi wyjatkow."""
+    """One-off environment detection. Never raises."""
     try:
         import torch
     except ImportError as exc:
-        return Probe(None, False, None, False, f"brak torch: {exc}")
+        return Probe(None, False, None, False, f"torch missing: {exc}")
 
     if not torch.cuda.is_available():
-        return Probe(None, False, None, False, "CUDA niedostepna")
+        return Probe(None, False, None, False, "CUDA unavailable")
 
     try:
         import sol_attn  # noqa: F401
     except ImportError as exc:
         return Probe(None, False, None, False,
-                     f"pakiet sol-attn niezainstalowany ({exc}); "
-                     "uv pip install -e vendor/sana-sol-engine/techniques/sparse_backends")
+                     f"the sol-attn package is not installed ({exc}); "
+                     "uv pip install -e <sana>/techniques/sparse_backends")
 
     arch = tuple(torch.cuda.get_device_capability(device))
     cute = cute_runtime_available()
@@ -91,7 +91,7 @@ def probe(device=None) -> Probe:
 
 
 def load_sol_attn():
-    """Publiczne API kernela. Importowane leniwie — pierwsze wywolanie kompiluje."""
+    """The kernel's public API. Imported lazily — the first call compiles."""
     from sol_attn import sol_attn
 
     return sol_attn

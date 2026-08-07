@@ -1,13 +1,13 @@
-"""Wezel SolAttnH3 — UI i montaz na ModelPatcherze.
+"""The SolAttnH3 node — UI and mounting onto the ModelPatcher.
 
-Montowane sa trzy rzeczy, wszystkie na publicznych API ComfyUI:
+Four things are mounted, all on public ComfyUI APIs:
 
-  1. `transformer_options["optimized_attention_override"]` — przechwycenie uwagi
-  2. wrapper `WrappersMP.DIFFUSION_MODEL` — raz na forward: layout, sink, krok
-  3. `patches_replace["dit"][("double_block", i)]` — stempel indeksu bloku
-  4. wrapper `WrappersMP.OUTER_SAMPLE` — granice przebiegu i kontrola zbiorcza
+  1. `transformer_options["optimized_attention_override"]` — intercepts attention
+  2. a `WrappersMP.DIFFUSION_MODEL` wrapper — per forward: layout, sink, step
+  3. `patches_replace["dit"][("double_block", i)]` — stamps the block index
+  4. a `WrappersMP.OUTER_SAMPLE` wrapper — run boundaries and the aggregate check
 
-Zaden plik w `comfy/` nie jest modyfikowany.
+No file under `comfy/` is modified.
 """
 from __future__ import annotations
 
@@ -23,42 +23,46 @@ STAMP = "solattn_block"
 
 
 class SolAttnH3:
-    """Training-free rzadka uwaga Sol-Attn dla natywnego MiniMax-H3."""
+    """Training-free sparse attention (Sol-Attn) for native MiniMax-H3."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "model": ("MODEL",),
-                "enabled": ("BOOLEAN", {"default": True}),
+                "enabled": ("BOOLEAN", {"default": True,
+                            "tooltip": "Turns the node off without rewiring the graph."}),
                 "tau": ("FLOAT", {"default": 1.0, "min": -1000.0, "max": 10.0, "step": 0.05,
-                                  "tooltip": "Wyzsze wartosci wybieraja mniej blokow K/V do "
-                                             "dokladnej uwagi. 1.0 to zwalidowana polityka H3."}),
+                                  "tooltip": "Higher values select fewer K/V blocks for exact "
+                                             "attention. 1.0 is the validated H3 policy."}),
                 "thresh_type": (["diag", "exact"], {"default": "diag",
-                                "tooltip": "exact = prog pelnokowariancyjny, dokladniejszy i drozszy."}),
+                                "tooltip": "exact uses the full-covariance threshold: more "
+                                           "accurate, more expensive."}),
                 "first_dense_steps": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 50.0, "step": 0.05,
-                                      "tooltip": "Ponizej 1 to ulamek harmonogramu, od 1 sztywna "
-                                                 "liczba krokow. 0.2 odpowiada referencyjnym 10/50."}),
+                                      "tooltip": "Below 1 this is a fraction of the schedule; "
+                                                 "1 and above is a fixed step count. 0.2 matches "
+                                                 "the reference's 10 steps out of 50."}),
                 "first_dense_layers": ("INT", {"default": 2, "min": 0, "max": 50,
-                                       "tooltip": "Pierwsze N blokow DiT liczonych gesto."}),
+                                       "tooltip": "The first N DiT blocks stay dense. Counted "
+                                                  "from zero."}),
                 "sink_mode": (list(SINK_MODES), {"default": "prefix",
-                              "tooltip": "prefix = tekst + warunkowanie + audio trzymane dokladnie. "
-                                         "text = polityka referencyjna, sam tekst."}),
+                              "tooltip": "prefix keeps text, conditioning and audio rows exact. "
+                                         "text reproduces the reference policy."}),
                 "correctness_gate": ("BOOLEAN", {"default": True,
-                                     "tooltip": "Raz na ksztalt porownuje kernel z SDPA na "
-                                                "prawdziwych QKV. Fail przerywa generowanie."}),
+                                     "tooltip": "Once per shape, compares the kernel against SDPA "
+                                                "on real QKV. A failure aborts generation."}),
                 "strict": ("BOOLEAN", {"default": False,
-                           "tooltip": "Zamienia kazda niezamierzona odmowe sciezki rzadkiej "
-                                      "w wyjatek. Do walidacji, nie do codziennej pracy."}),
+                           "tooltip": "Turns every unintended decline of the sparse path into an "
+                                      "exception. For validation, not for daily use."}),
             }
         }
 
     RETURN_TYPES = ("MODEL",)
     FUNCTION = "patch"
     CATEGORY = "model_patches/attention"
-    DESCRIPTION = ("Sol-Attn (NVIDIA Sol Engine) dla MiniMax-H3. Training-free rzadka uwaga; "
-                   "degraduje sie do gestej uwagi z nazwanym powodem, gdy kontrakt kernela "
-                   "nie jest spelniony.")
+    DESCRIPTION = ("Sol-Attn (NVIDIA Sol Engine) for MiniMax-H3. Training-free sparse "
+                   "attention; falls back to dense attention with a named reason whenever "
+                   "the kernel contract is not met.")
 
     def patch(self, model, enabled, tau, thresh_type, first_dense_steps,
               first_dense_layers, sink_mode, correctness_gate, strict):
@@ -74,9 +78,10 @@ class SolAttnH3:
         state.backend = found.backend
         if not found.available:
             state.kernel_error = found.error
-            print(f"{LOG} kernel {found.describe()} — model przejdzie na gesta uwage", flush=True)
+            print(f"{LOG} kernel {found.describe()} — the model will run dense attention",
+                  flush=True)
         else:
-            print(f"{LOG} {found.describe()}, blokow DiT: {blocks}", flush=True)
+            print(f"{LOG} {found.describe()}, DiT blocks: {blocks}", flush=True)
 
         patched = model.clone()
         options = patched.model_options.setdefault("transformer_options", {})
@@ -90,22 +95,22 @@ class SolAttnH3:
 
 
 def _block_count(model) -> int:
-    """Liczba blokow DiT; sluzy tez jako sprawdzenie, ze to na pewno MiniMax-H3."""
+    """Number of DiT blocks; doubles as the check that this really is MiniMax-H3."""
     diffusion = getattr(getattr(model, "model", None), "diffusion_model", None)
     blocks = getattr(diffusion, "blocks", None)
     if blocks is None or type(diffusion).__name__ != "MiniMaxH3Model":
         raise ValueError(
-            f"{LOG} SolAttnH3 dziala tylko z MiniMax-H3; dostano "
-            f"{type(diffusion).__name__}. Wezel nie zostal zamontowany."
+            f"{LOG} SolAttnH3 only works with MiniMax-H3; got "
+            f"{type(diffusion).__name__}. The node was not mounted."
         )
     return len(blocks)
 
 
 def _make_stamp(index: int):
-    """Stempluje prawdziwy indeks bloku i oddaje sterowanie oryginalnemu blokowi.
+    """Stamp the real block index, then hand control to the original block.
 
-    Liczenie wywolan uwagi zamiast stemplowania przesuneloby first_dense_layers,
-    bo token_refiner (model.py:584) tez wola Attention z head_dim 128.
+    Counting attention calls instead of stamping would shift first_dense_layers,
+    because token_refiner (model.py:584) also calls Attention with head_dim 128.
     """
     def stamp(args, extra):
         args["transformer_options"][STAMP] = index
@@ -114,7 +119,7 @@ def _make_stamp(index: int):
 
 
 def _make_run_wrapper(state):
-    """Granice jednego przebiegu samplera: reset licznikow i kontrola zbiorcza."""
+    """Boundaries of one sampler run: counter reset and the aggregate check."""
     def wrapper(executor, *args, **kwargs):
         state.begin_run()
         try:
@@ -127,7 +132,7 @@ def _make_run_wrapper(state):
 
 
 def _make_forward_wrapper(state, policy):
-    """Raz na forward: layout, zakres sinka i numer kroku z harmonogramu."""
+    """Once per forward: layout, sink range and the step index from the schedule."""
     def wrapper(executor, x, timestep, context, transformer_options, **kwargs):
         sink = None
         try:
@@ -136,7 +141,8 @@ def _make_forward_wrapper(state, policy):
             if layout is not None:
                 sink = sink_from_segments(layout.segments, layout.seq_len, policy.sink_mode)
         except Exception as exc:
-            _warn_once(state, f"nie udalo sie wyznaczyc sinka: {type(exc).__name__}: {exc}")
+            _warn_once(state, f"could not determine the sink range: "
+                              f"{type(exc).__name__}: {exc}")
 
         sample_sigmas = transformer_options.get("sample_sigmas")
         step = resolve_step(transformer_options.get("sigmas"), sample_sigmas)
@@ -147,12 +153,12 @@ def _make_forward_wrapper(state, policy):
 
 
 def _resolve_layout(model, payload, x, context):
-    """Layout spakowanej sekwencji: z payloadu, a gdy go brak — odtworzony.
+    """The packed-sequence layout: from the payload, or rebuilt when absent.
 
-    `extra_conds` buduje go raz na przebieg, ale tylko gdy zna latent_shapes.
-    Odtworzenie odwzorowuje `model.py:506-524`. Nieaktualny layout nie moze dac
-    zlego wyniku: sprawdzenie `rows != sink.seq_len` w `decline()` zlapie go
-    i wywolanie spadnie na gesta uwage.
+    `extra_conds` builds it once per run, but only when it knows latent_shapes.
+    The rebuild mirrors `model.py:506-524`. A stale layout cannot produce a wrong
+    result: the `rows != sink.seq_len` check in `decline()` catches it and the
+    call falls through to dense attention.
     """
     payload = payload or {}
     layout = payload.get("layout")

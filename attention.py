@@ -1,12 +1,12 @@
-"""Adapter wpinany przez `transformer_options["optimized_attention_override"]`.
+"""The adapter installed via `transformer_options["optimized_attention_override"]`.
 
-`wrap_attn` (comfy/ldm/modules/attention.py:148) wola nas jako
-`override(func, q, k, v, heads, **kwargs)`, gdzie `func` to oryginalny backend
-uwagi. Zwrocenie `func(...)` daje darmowy gesty fallback — dokladnie ten sam
-kod, ktory bylby uzyty bez node'a.
+`wrap_attn` (comfy/ldm/modules/attention.py:148) calls us as
+`override(func, q, k, v, heads, **kwargs)`, where `func` is the original
+attention backend. Returning `func(...)` gives a free dense fallback — the exact
+code that would have run without this node.
 
-Wejscie z H3 to BHSD `(1, heads, S, 128)` (`skip_reshape=True`), wyjscie
-oczekiwane jako `(1, S, heads*128)`.
+H3 hands over BHSD `(1, heads, S, 128)` (`skip_reshape=True`) and expects
+`(1, S, heads*128)` back.
 """
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ BLOCK_SIZE = 64
 
 
 def dense_bthd(q, k, v):
-    """SDPA na layoucie BTHD, ten sam layout na wyjsciu.
+    """SDPA on the BTHD layout, same layout on the way out.
 
-    `q` moze byc krotsze od `k`/`v` — tak liczone sa wiersze-zapytania prefiksu.
+    `q` may be shorter than `k`/`v` — that is how the prefix query rows are
+    recomputed.
     """
     out = F.scaled_dot_product_attention(
         q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False
@@ -33,15 +34,15 @@ def dense_bthd(q, k, v):
 
 
 def run_gate(sol_attn, q, k, v, thresh_type: str) -> dict:
-    """Sprawdz arytmetyke kernela wzgledem SDPA na prawdziwych QKV.
+    """Check the kernel's arithmetic against SDPA on real QKV.
 
-    `tau=-1000` przepuszcza wszystkie bloki, wiec mierzona jest arytmetyka
-    kernela, a nie polityka routingu. Proba na losowych tensorach odpowiada na
-    pytanie o kernel, nie o ten model przy tym ksztalcie.
+    `tau=-1000` admits every block, so what is measured is the kernel's
+    arithmetic rather than the routing policy. A probe on random tensors answers
+    a question about the kernel, not about this model at this shape.
 
-    Gate biegnie na produkcyjnej liczbie glow: `preprocess.prepare` autotunuje
-    kernele Tritona kluczem po samym `T`, wiec pierwsze wywolanie przy mniejszej
-    liczbie glow zapisaloby konfiguracje dobrana dla wezszej siatki.
+    The gate runs at the production head count: `preprocess.prepare` autotunes
+    its Triton kernels on a key of `T` alone, so a first call at a lower head
+    count would cache a configuration chosen for a narrower grid.
     """
     got = sol_attn(q, k, v, tau=-1000.0, thresh_type=thresh_type)
     want = dense_bthd(q, k, v)
@@ -52,28 +53,28 @@ def run_gate(sol_attn, q, k, v, thresh_type: str) -> dict:
         "mean_abs": float(diff.mean()),
         "rel_l2": float(torch.linalg.vector_norm(got.float() - want.float())
                         / torch.linalg.vector_norm(want.float()).clamp_min(1e-12)),
-        # Skala odniesienia: `max_abs` sam w sobie zalezy od rozpietosci aktywacji,
-        # wiec prog bezwzgledny nie przenosi sie miedzy modelami ani ksztaltami.
+        # Reference scale: `max_abs` on its own depends on the activation range,
+        # so an absolute threshold does not transfer between models or shapes.
         "ref_max": ref_max,
         "max_rel": float(diff.max()) / max(ref_max, 1e-12),
         "over_1e2": float((diff > 1e-2).float().mean()),
         "shape": list(q.shape),
     }
-    # `mean_abs` i `rel_l2` sa dokladnie te, ktore ustawila NVIDIA. Bezwzgledny
-    # limit na `max_abs` (0.08 / 0.15) zostal zastapiony wzglednym, bo nie
-    # przenosi sie miedzy rozkladami aktywacji:
+    # `mean_abs` and `rel_l2` are exactly the limits NVIDIA set. The absolute
+    # limit on `max_abs` (0.08 / 0.15) was replaced by a relative one, because it
+    # does not transfer between activation distributions:
     #
-    # Na prawdziwych QKV H3 zmierzono ref_max=33.0 i max_abs=0.125. bf16 ma
-    # 7 bitow mantysy, wiec dla |x| w [32, 64) ulp wynosi 32*2^-7 = 0.25, a
-    # granica poprawnego zaokraglenia to pol ulp = 0.125. Najgorszy element to
-    # zatem *teoretyczne minimum* bledu reprezentacji przy tej skali — kernel
-    # i SDPA zaokraglily te sama wartosc do dwoch sasiednich liczb bf16.
-    # Ten sam ksztalt na tensorach syntetycznych N(0, 0.5) daje max_abs=0.00012:
-    # roznica siedzi w skali wyjscia, nie w kernelu.
+    # On real H3 QKV we measured ref_max=33.0 and max_abs=0.125. bfloat16 has
+    # 7 mantissa bits, so for |x| in [32, 64) one ulp is 32*2^-7 = 0.25 and the
+    # correct-rounding bound is half an ulp = 0.125. The worst element is
+    # therefore the *theoretical minimum* representation error at that magnitude
+    # — the kernel and SDPA rounded the same value to two adjacent bf16 numbers.
+    # The same shape on synthetic N(0, 0.5) tensors gives max_abs=0.00012: the
+    # difference lives in the output scale, not in the kernel.
     #
-    # 0.02 to okolo piec polulpow przy szczycie tensora — z zapasem na kolejnosc
-    # akumulacji, a wciaz o dwa rzedy wielkosci ponizej bledu, jaki daje zepsuty
-    # routing albo indeksowanie (tam blad wzgledny jest rzedu jednosci).
+    # 0.02 is about five half-ulps at the tensor's peak — room for accumulation
+    # order, still two orders of magnitude below what broken routing or indexing
+    # would produce (there the relative error is of order one).
     limits = {
         "max_rel": 0.02,
         "mean_abs": 0.002,
@@ -87,11 +88,11 @@ def run_gate(sol_attn, q, k, v, thresh_type: str) -> dict:
 
 @torch.no_grad()
 def route_density(q, k, v, *, tau: float, thresh_type: str, sink) -> dict:
-    """Jaki ulamek blokow K/V routing zachowuje.
+    """What fraction of K/V blocks the routing keeps.
 
-    Raportowane, bo awaria, ktorej ten node ma unikac, to konfiguracja licząca
-    po cichu gesto: gestosc bliska 1.0 znaczy, ze routing nie routuje, a 0.0 —
-    ze sie zapadl.
+    Reported because the failure this node exists to avoid is a configuration
+    that quietly computes dense: a density near 1.0 says the routing is not
+    routing, and 0.0 says it collapsed.
     """
     from sol_attn.preprocess import prepare
 
@@ -103,7 +104,7 @@ def route_density(q, k, v, *, tau: float, thresh_type: str, sink) -> dict:
     padded = F.pad(q, (0, 0, 0, 0, 0, blocks * BLOCK_SIZE - tokens))
     counts = torch.full((blocks,), float(BLOCK_SIZE), device=q.device, dtype=torch.float32)
     counts[-1] = tokens - (blocks - 1) * BLOCK_SIZE
-    # sum(dtype=float32) akumuluje bez materializowania kopii float32 calego q
+    # sum(dtype=float32) accumulates without materializing a float32 copy of q
     q_bar = padded.view(q.shape[0], blocks, BLOCK_SIZE, heads, q.shape[3]).sum(
         dim=2, dtype=torch.float32) / counts.view(1, blocks, 1, 1)
 
@@ -112,7 +113,7 @@ def route_density(q, k, v, *, tau: float, thresh_type: str, sink) -> dict:
     threshold_density = float(routed.float().mean())
 
     ids = torch.arange(blocks, device=q.device)
-    routed |= ((ids[:, None] - ids[None, :]).abs() <= 1)[None, :, :, None]   # pasmo lokalne
+    routed |= ((ids[:, None] - ids[None, :]).abs() <= 1)[None, :, :, None]   # local band
     sink_blocks = 0
     if sink.tokens:
         first = sink.start // BLOCK_SIZE
@@ -128,7 +129,7 @@ def route_density(q, k, v, *, tau: float, thresh_type: str, sink) -> dict:
 
 
 def make_override(state, policy):
-    """Zbuduj callable dla `transformer_options["optimized_attention_override"]`."""
+    """Build the callable for `transformer_options["optimized_attention_override"]`."""
 
     def override(func, q, k, v, heads, *args, **kwargs):
         def dense():
@@ -164,9 +165,9 @@ def make_override(state, policy):
             pair[0].record()
         try:
             sol_attn = state.sol_attn or _attach_kernel(state)
-            # Kernel wymaga contiguous BTHD; H3 podaje widoki w spakowanym
-            # buforze qkv_proj, wiec ta kopia jest nieunikniona (~6,5% czasu
-            # kernela przy 31k wierszy, zmierzone).
+            # The kernel wants contiguous BTHD; H3 hands over views into the
+            # packed qkv_proj buffer, so this copy is unavoidable (~6.5% of
+            # kernel time at 31k rows, measured).
             qb, kb, vb = (x.transpose(1, 2).contiguous() for x in (q, k, v))
             sink = state.sink
 
@@ -177,20 +178,20 @@ def make_override(state, policy):
 
             out = sol_attn(qb, kb, vb, tau=policy.tau, thresh_type=policy.thresh_type,
                            kv_splits=1, sink_start=sink.start, sink_tokens=sink.tokens)
-            # Sink czyni prefiks dokladnym jako K/V, ale jego wlasne zapytania
-            # nadal routuja sie rzadko. README kernela jest jednoznaczne, ze
-            # integracja MMDiT musi przeliczyc te wiersze gesto.
+            # The sink makes the prefix exact as K/V, but its own query rows
+            # still route sparsely. The kernel's README is explicit that an
+            # MMDiT integration must recompute those rows densely.
             if sink.tokens:
                 out[:, sink.start:sink.stop] = dense_bthd(qb[:, sink.start:sink.stop], kb, vb)
         except torch.OutOfMemoryError:
             state.latch_oom()
-            print(f"{LOG} brak pamieci na sciezce rzadkiej; gesta uwaga do konca przebiegu",
-                  flush=True)
+            print(f"{LOG} out of memory on the sparse path; dense attention for the "
+                  "rest of the run", flush=True)
             return dense()
 
         if pair is not None:
             pair[1].record()
-            # Pierwsze wywolanie niesie kompilacje Tritona, gate i sonde gestosci.
+            # The first call carries Triton compilation, the gate and the density probe.
             state.record_timing(pair, "sparse_first" if state.sparse_calls == 0 else "sparse")
         state.note_sparse()
         if kwargs.get("skip_output_reshape"):
@@ -206,28 +207,28 @@ def _attach_kernel(state):
 
 
 def _gate_once(state, sol_attn, qb, kb, vb, policy) -> None:
-    """Gate poprawnosci raz na ksztalt. Brak pamieci pomija gate, nie zweza go.
+    """Correctness gate, once per shape. Out of memory skips it, never narrows it.
 
-    Zwezenie do mniejszej liczby glow zapisaloby w cache'u autotuningu Tritona
-    konfiguracje dobrana dla wezszej siatki, pod kluczem, ktorego uzyja pozniej
-    wywolania produkcyjne. Lepiej nie zmierzyc, niz zepsuc.
+    Narrowing to fewer heads would write into Triton's autotune cache a
+    configuration chosen for a narrower grid, under the key that production
+    calls will later use. Better not to measure than to poison it.
     """
     try:
         stats = run_gate(sol_attn, qb, kb, vb, policy.thresh_type)
     except torch.OutOfMemoryError:
-        state.record_gate(qb.shape[1:], {"passed": None, "skipped": "brak pamieci"})
-        print(f"{LOG} gate poprawnosci pominiety: brak pamieci", flush=True)
+        state.record_gate(qb.shape[1:], {"passed": None, "skipped": "out of memory"})
+        print(f"{LOG} correctness gate skipped: out of memory", flush=True)
         return
     state.record_gate(qb.shape[1:], stats)
     verdict = "PASS" if stats["passed"] else "FAIL"
-    print(f"{LOG} gate poprawnosci {verdict} max_abs={stats['max_abs']:.5f} "
+    print(f"{LOG} correctness gate {verdict} max_abs={stats['max_abs']:.5f} "
           f"mean_abs={stats['mean_abs']:.6f} rel_l2={stats['rel_l2']:.5f} "
           f"ref_max={stats['ref_max']:.3f} max_rel={stats['max_rel']:.5f} "
-          f"over_1e2={stats['over_1e2']:.2e} limity={stats['limits']}", flush=True)
+          f"over_1e2={stats['over_1e2']:.2e} limits={stats['limits']}", flush=True)
     if not stats["passed"]:
         raise RuntimeError(
-            f"{LOG} gate poprawnosci nie przeszedl na prawdziwych QKV: {stats}. "
-            "Cicha akceptacja zepsutego kernela jest gorsza niz brak przyspieszenia."
+            f"{LOG} correctness gate failed on real QKV: {stats}. "
+            "Silently accepting a broken kernel is worse than no speedup."
         )
 
 
@@ -236,9 +237,9 @@ def _density_once(state, qb, kb, vb, policy, sink) -> None:
         state.density = route_density(qb, kb, vb, tau=policy.tau,
                                       thresh_type=policy.thresh_type, sink=sink)
     except torch.OutOfMemoryError:
-        state.density = {"skipped": "brak pamieci"}
+        state.density = {"skipped": "out of memory"}
         return
-    except Exception as exc:                      # sonda diagnostyczna, nie sciezka krytyczna
+    except Exception as exc:               # diagnostic probe, not a critical path
         state.density = {"skipped": f"{type(exc).__name__}: {exc}"}
         return
-    print(f"{LOG} gestosc routingu {state.density}", flush=True)
+    print(f"{LOG} routing density {state.density}", flush=True)

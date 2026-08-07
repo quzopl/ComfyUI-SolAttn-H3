@@ -1,8 +1,9 @@
-"""Zegar kroku, licznik blokow, powody odmowy i kontrola zbiorcza przebiegu.
+"""Step clock, block counter, decline reasons and the per-run aggregate check.
 
-Zasada calego modulu: konfiguracja, ktora poprosila o rzadka uwage i po cichu
-dostala gesta, to bledny pomiar w prawidlowej etykiecie. Dlatego kazda odmowa
-niesie powod (string), a nie boolean, i jest liczona.
+The principle behind this whole module: a configuration that asked for sparse
+attention and quietly got dense attention is a wrong measurement wearing the
+right label. So every decline carries a reason (a string), never a boolean, and
+every decline is counted.
 """
 from __future__ import annotations
 
@@ -10,11 +11,11 @@ from dataclasses import dataclass, field
 
 from .layout import SinkRange
 
-# Powody zamierzone — cicho, tylko licznik.
+# Intended reasons — silent, counted only.
 DECLINE_DISABLED = "disabled"
 DECLINE_WARMUP = "warmup_step"
 DECLINE_DENSE_LAYER = "dense_layer"
-# Powody niezamierzone — log raz, w trybie strict wyjatek.
+# Unintended reasons — logged once, raised under strict.
 DECLINE_KERNEL = "kernel_unavailable"
 DECLINE_OOM = "oom"
 DECLINE_MASK = "mask_present"
@@ -32,11 +33,11 @@ LOG = "[sol-attn-h3]"
 
 @dataclass
 class Policy:
-    """Parametry polityki rzadkiej uwagi.
+    """Sparse-attention policy parameters.
 
-    Domyslne wartosci pochodza ze zwalidowanej linii H3 w Sol-Engine
-    (`models/minimax_h3/optimized/sol_attn_h3.py`) i nie powinny byc zmieniane
-    bez pomiaru.
+    Defaults come from the validated H3 line in Sol-Engine
+    (`models/minimax_h3/optimized/sol_attn_h3.py`) and should not be changed
+    without measuring.
     """
 
     enabled: bool = True
@@ -50,11 +51,11 @@ class Policy:
 
 
 def dense_step_count(first_dense_steps: float, total_steps: int | None) -> int:
-    """Liczba poczatkowych krokow liczonych gesto.
+    """How many leading steps run dense.
 
-    Wartosc < 1 jest ulamkiem dlugosci harmonogramu, >= 1 sztywna liczba krokow.
-    Referencyjne 10 pochodzi z harmonogramu 50-krokowego; przy 20 krokach
-    oznaczaloby polowe przebiegu gesto.
+    A value below 1 is a fraction of the schedule; 1 and above is a fixed step
+    count. The reference's 10 comes from a 50-step schedule, which at 20 steps
+    would mean running half the schedule dense.
     """
     if first_dense_steps >= 1:
         return int(first_dense_steps)
@@ -64,11 +65,12 @@ def dense_step_count(first_dense_steps: float, total_steps: int | None) -> int:
 
 
 def resolve_step(sigmas, sample_sigmas) -> int | None:
-    """Numer biezacego kroku odczytany z harmonogramu samplera.
+    """The current step index, read off the sampler's own schedule.
 
-    Wzorzec z `comfy/context_windows.py:558-560`. Referencja NVIDII musiala
-    zgadywac poczatek requestu z kierunku zmian timestepu i pomylila sie na tym
-    dwa razy; ComfyUI podaje caly harmonogram, wiec nie ma czego zgadywac.
+    Pattern taken from `comfy/context_windows.py:558-560`. NVIDIA's reference had
+    to guess where a request started from the direction of timestep change, and
+    got it wrong twice; ComfyUI hands over the whole schedule, so there is
+    nothing to guess.
     """
     if sigmas is None or sample_sigmas is None:
         return None
@@ -83,7 +85,7 @@ def resolve_step(sigmas, sample_sigmas) -> int | None:
 
 @dataclass
 class SolAttnState:
-    """Stan jednego zamontowanego node'a, wspoldzielony miedzy wrapperami."""
+    """State of one mounted node, shared across the wrappers."""
 
     policy: Policy
     kernel_error: str | None = None
@@ -112,10 +114,10 @@ class SolAttnState:
     _logged: set = field(default_factory=set, init=False)
     _gated: set = field(default_factory=set, init=False)
 
-    # -- cykl zycia -----------------------------------------------------------
+    # -- lifecycle ------------------------------------------------------------
 
     def begin_run(self) -> None:
-        """Poczatek jednego przebiegu samplera."""
+        """Start of one sampler run."""
         self.sparse_calls = 0
         self.dense_calls = 0
         self.declined = {}
@@ -130,7 +132,7 @@ class SolAttnState:
 
     def begin_forward(self, sink: SinkRange | None, step: int | None,
                       total_steps: int | None) -> None:
-        """Poczatek jednego forwardu modelu."""
+        """Start of one model forward."""
         self.sink = sink
         self.step = step
         self.total_steps = total_steps
@@ -139,7 +141,7 @@ class SolAttnState:
             self._max_step = max(self._max_step, step)
 
     def next_block(self) -> int:
-        """Zapasowy licznik blokow, gdy stempel z patches_replace niedostepny."""
+        """Fallback block counter, used when the patches_replace stamp is absent."""
         index = self._block
         self._block += 1
         return index
@@ -147,14 +149,14 @@ class SolAttnState:
     def latch_oom(self) -> None:
         self._oom = True
 
-    # -- decyzja --------------------------------------------------------------
+    # -- decision -------------------------------------------------------------
 
     def decline(self, *, rows: int | None = None, dtype=None, head_dim: int | None = None,
                 mask=None, block_index: int | None = None, skip_reshape=None,
                 batch: int | None = None) -> str | None:
-        """Powod, dla ktorego to wywolanie nie moze isc sciezka rzadka, albo None.
+        """Why this call cannot take the sparse path, or None if it can.
 
-        Kolejnosc od najtanszego sprawdzenia do najdrozszego.
+        Ordered from the cheapest check to the most expensive.
         """
         import torch
 
@@ -186,7 +188,7 @@ class SolAttnState:
             return DECLINE_DENSE_LAYER
         return None
 
-    # -- ksiegowanie ----------------------------------------------------------
+    # -- bookkeeping ----------------------------------------------------------
 
     def note(self, reason: str) -> None:
         self.declined[reason] = self.declined.get(reason, 0) + 1
@@ -194,21 +196,21 @@ class SolAttnState:
         if reason in INTENTIONAL:
             return
         if self.policy.strict:
-            raise RuntimeError(f"{LOG} odmowa sciezki rzadkiej: {reason}")
+            raise RuntimeError(f"{LOG} sparse path declined: {reason}")
         if reason not in self._logged:
             self._logged.add(reason)
-            print(f"{LOG} gesta uwaga, powod: {reason}", flush=True)
+            print(f"{LOG} running dense, reason: {reason}", flush=True)
 
     def note_sparse(self) -> None:
         self.sparse_calls += 1
 
-    # -- pomiar czasu uwagi ---------------------------------------------------
+    # -- attention timing -----------------------------------------------------
 
     def timer(self):
-        """Para zdarzen CUDA do zmierzenia jednego wywolania uwagi.
+        """A pair of CUDA events for timing one attention call.
 
-        Zdarzenia rejestruja sie asynchronicznie; synchronizacja nastepuje raz,
-        w `flush_timing()`. Dzieki temu pomiar nie serializuje strumienia.
+        The events are recorded asynchronously; synchronization happens once, in
+        `flush_timing()`, so the measurement never serializes the stream.
         """
         import torch
 
@@ -221,7 +223,7 @@ class SolAttnState:
             self._events.append((pair, kind))
 
     def flush_timing(self) -> None:
-        """Zsumuj zmierzone czasy. Jedna synchronizacja na caly przebieg."""
+        """Sum the recorded times. One synchronization for the whole run."""
         if not self._events:
             return
         import torch
@@ -230,32 +232,33 @@ class SolAttnState:
         for (start, end), kind in self._events:
             try:
                 self.attn_ms[kind] += start.elapsed_time(end)
-            except RuntimeError:      # zdarzenie nigdy nie trafilo na strumien
+            except RuntimeError:      # the event never made it onto the stream
                 continue
         self._events = []
 
     def end_run(self) -> None:
-        """Kontrola zbiorcza: przebieg, ktory minal rozgrzewke i nie tknal kernela.
+        """Aggregate check: a run that cleared warm-up without touching the kernel.
 
-        Powody per-call tego nie wylapia, bo powod robiacy szkode (warmup_step)
-        jest sam w sobie legalny. Blad istnieje tylko w agregacie.
+        Per-call reasons cannot catch this, because the reason that does the
+        damage (warmup_step) is itself legitimate. The error exists only in
+        aggregate.
         """
         self.flush_timing()
-        # Wylaczony wezel to nie jest awaria pomiaru — wariant `off` w benchmarku
-        # ma zero wywolan rzadkich z definicji.
+        # A disabled node is not a measurement failure — the benchmark's `off`
+        # variant has zero sparse calls by definition.
         if not self.policy.enabled or self._max_step < 0:
             return
         warmup = dense_step_count(self.policy.first_dense_steps, self.total_steps)
         if self._max_step + 1 <= warmup or self.sparse_calls > 0:
             return
-        message = (f"{LOG} przebieg przeszedl {self._max_step + 1} krokow przy "
-                   f"first_dense_steps={warmup} i nie wykonal ani jednego wywolania "
-                   f"rzadkiego; odmowy={self.declined}")
+        message = (f"{LOG} run passed {self._max_step + 1} steps with "
+                   f"first_dense_steps={warmup} and made not a single sparse call; "
+                   f"declines={self.declined}")
         if self.policy.strict:
             raise RuntimeError(message)
-        print(f"{LOG} UWAGA: {message}", flush=True)
+        print(f"{LOG} WARNING: {message}", flush=True)
 
-    # -- gate raz na ksztalt --------------------------------------------------
+    # -- gate, once per shape -------------------------------------------------
 
     def should_gate(self, shape) -> bool:
         return self.policy.correctness_gate and tuple(shape) not in self._gated
@@ -264,15 +267,15 @@ class SolAttnState:
         self._gated.add(tuple(shape))
         self.gate_stats = stats
 
-    # -- raport ---------------------------------------------------------------
+    # -- reporting ------------------------------------------------------------
 
     def _per_call(self) -> dict:
-        """Czas na wywolanie, z pierwszym wywolaniem rzadkim wylaczonym.
+        """Per-call time, with the first sparse call excluded.
 
-        W pierwszym siedzi kompilacja kerneli Tritona, gate poprawnosci i sonda
-        gestosci — koszty jednorazowe, ktore przy krotkim przebiegu przebijaja
-        wlasciwy pomiar (przy 288 wywolaniach kompilacja rzedu 4 s to 14 ms na
-        wywolanie, czyli wiecej niz sam kernel).
+        That first call carries Triton kernel compilation, the correctness gate
+        and the density probe — one-off costs that on a short run swamp the
+        actual measurement (across 288 calls, a 4 s compile is 14 ms per call,
+        i.e. more than the kernel itself).
         """
         steady = max(self.sparse_calls - 1, 0)
         return {
