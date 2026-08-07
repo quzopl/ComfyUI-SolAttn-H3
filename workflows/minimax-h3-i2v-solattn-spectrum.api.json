@@ -1,0 +1,209 @@
+{
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "clip": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+   "type": "minimax",
+   "device": "default"
+  }
+ },
+ "vae_video": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+  }
+ },
+ "vae_audio": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  }
+ },
+ "image": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "your_first_frame.png",
+   "upload": "image"
+  }
+ },
+ "cond": {
+  "class_type": "MiniMaxH3ImageToVideo",
+  "inputs": {
+   "clip": [
+    "clip",
+    0
+   ],
+   "vae": [
+    "vae_video",
+    0
+   ],
+   "prompt": "The camera slowly pushes in. Gentle wind moves through the scene, soft natural light, cinematic depth of field.",
+   "width": 864,
+   "height": 480,
+   "length": 125,
+   "first_frame": [
+    "image",
+    0
+   ]
+  }
+ },
+ "noise": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 42
+  }
+ },
+ "sampler": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "res_multistep"
+  }
+ },
+ "solattn": {
+  "class_type": "SolAttnH3",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "enabled": true,
+   "tau": 1.0,
+   "thresh_type": "diag",
+   "first_dense_steps": 0.2,
+   "first_dense_layers": 2,
+   "sink_mode": "prefix",
+   "correctness_gate": true,
+   "strict": false
+  }
+ },
+ "spectrum": {
+  "class_type": "SpectrumApplyMiniMaxH3",
+  "inputs": {
+   "model": [
+    "solattn",
+    0
+   ],
+   "enabled": true,
+   "blend_weight": 0.5,
+   "degree": 4,
+   "ridge_lambda": 0.1,
+   "window_size": 2.0,
+   "flex_window": 0.75,
+   "warmup_steps": 5,
+   "tail_actual_steps": 1,
+   "max_history": 8,
+   "debug": false,
+   "history_storage": "system_ram"
+  }
+ },
+ "guider": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "spectrum",
+    0
+   ],
+   "conditioning": [
+    "cond",
+    0
+   ]
+  }
+ },
+ "sigmas": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "spectrum",
+    0
+   ],
+   "scheduler": "simple",
+   "steps": 20,
+   "denoise": 1.0
+  }
+ },
+ "sample": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "noise",
+    0
+   ],
+   "guider": [
+    "guider",
+    0
+   ],
+   "sampler": [
+    "sampler",
+    0
+   ],
+   "sigmas": [
+    "sigmas",
+    0
+   ],
+   "latent_image": [
+    "cond",
+    1
+   ]
+  }
+ },
+ "decode_video": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "sample",
+    0
+   ],
+   "vae": [
+    "vae_video",
+    0
+   ]
+  }
+ },
+ "decode_audio": {
+  "class_type": "VAEDecodeAudio",
+  "inputs": {
+   "samples": [
+    "sample",
+    0
+   ],
+   "vae": [
+    "vae_audio",
+    0
+   ]
+  }
+ },
+ "video": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "decode_video",
+    0
+   ],
+   "audio": [
+    "decode_audio",
+    0
+   ],
+   "fps": 24.0,
+   "bit_depth": 8
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "video",
+    0
+   ],
+   "filename_prefix": "video/H3_i2v_solattn_spectrum",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}
