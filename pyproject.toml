@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-solattn-h3"
+version = "0.1.0"
+description = "Sol-Attn (NVIDIA Sol Engine) dla MiniMax-H3 w ComfyUI"
+requires-python = ">=3.10"
+dependencies = ["sol-attn>=0.5.0"]
+
+[project.urls]
+Source = "https://github.com/NVlabs/Sana/tree/sol-engine"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: wymaga CUDA i zainstalowanego sol-attn"]

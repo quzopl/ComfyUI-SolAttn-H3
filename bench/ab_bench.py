@@ -1,0 +1,209 @@
+"""Pomiar A/B: ten sam graf H3 z wezlem SolAttnH3 i bez niego.
+
+Porownywane sa dwie rzeczy naraz, bo mierza co innego:
+
+  * **czas end-to-end** — to, co widzi uzytkownik, ale na maszynie, gdzie model
+    nie miesci sie w VRAM, zdominuje go streaming wag przez PCIe, a nie uwaga;
+  * **czas samej uwagi** — czesc, na ktora Sol-Attn faktycznie wplywa, zbierana
+    zdarzeniami CUDA wewnatrz node'a i raportowana w `stats()`.
+
+Wynik porownywany jest na zdekodowanych klatkach (PSNR): SaveLatent nie obsluguje
+latentu H3, ktory jest NestedTensorem z wideo i audio spakowanymi razem.
+
+Pierwsze uruchomienie po starcie ComfyUI placi za zaladowanie modelu w wariancie
+`off`, co zaburza porownanie — nalezy odpalic benchmark dwa razy i czytac drugi
+przebieg.
+
+Uzycie:
+    python bench/ab_bench.py --port 8199 --steps 8 --width 640 --height 384 --length 73
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import pathlib
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+PROMPT = ("A slow cinematic push-in on a lighthouse at dusk, waves breaking against "
+          "the rocks, seagulls calling overhead.")
+
+
+def build_graph(args, *, enabled: bool) -> dict:
+    """Graf w formacie API. `enabled=False` daje ten sam graf ze sciezka gesta."""
+    # Sol-Engine dla H3 sklada Sol-Attn z FirstBlockCache, wiec wspolpraca
+    # z MiniMaxH3Cache jest zamierzona. Cache pomija cale forwardy; zegar kroku
+    # oparty o sample_sigmas pozostaje wtedy poprawny, licznik by sie rozjechal.
+    model_src = "cache" if args.cache else "solattn"
+    graph = {
+        "unet": {"class_type": "UNETLoader",
+                 "inputs": {"unet_name": args.unet, "weight_dtype": "default"}},
+        "clip": {"class_type": "CLIPLoader",
+                 "inputs": {"clip_name": args.clip, "type": "minimax", "device": "default"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": args.vae}},
+        "cond": {"class_type": "MiniMaxH3ImageToVideo",
+                 "inputs": {"clip": ["clip", 0], "vae": ["vae", 0], "prompt": PROMPT,
+                            "width": args.width, "height": args.height, "length": args.length}},
+        "solattn": {"class_type": "SolAttnH3",
+                    "inputs": {"model": ["unet", 0], "enabled": enabled,
+                               "tau": args.tau, "thresh_type": args.thresh_type,
+                               "first_dense_steps": args.first_dense_steps,
+                               "first_dense_layers": args.first_dense_layers,
+                               "sink_mode": args.sink_mode,
+                               "correctness_gate": args.gate, "strict": args.strict}},
+        "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": args.seed}},
+        "guider": {"class_type": "BasicGuider",
+                   "inputs": {"model": [model_src, 0], "conditioning": ["cond", 0]}},
+        "sampler": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": args.sampler}},
+        "sigmas": {"class_type": "BasicScheduler",
+                   "inputs": {"model": [model_src, 0], "scheduler": "simple",
+                              "steps": args.steps, "denoise": 1.0}},
+        "sample": {"class_type": "SamplerCustomAdvanced",
+                   "inputs": {"noise": ["noise", 0], "guider": ["guider", 0],
+                              "sampler": ["sampler", 0], "sigmas": ["sigmas", 0],
+                              "latent_image": ["cond", 1]}},
+        # SaveLatent nie obsluguje latentu H3 (NestedTensor: wideo i audio
+        # spakowane razem), wiec porownanie idzie po zdekodowanych klatkach.
+        "decode": {"class_type": "VAEDecode",
+                   "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
+        "save": {"class_type": "SaveImage",
+                 "inputs": {"images": ["decode", 0],
+                            "filename_prefix": f"solattn_ab/{'on' if enabled else 'off'}"}},
+    }
+    if args.cache:
+        graph["cache"] = {"class_type": "MiniMaxH3Cache",
+                          "inputs": {"model": ["solattn", 0], "resuse_threshold": 0.1,
+                                     "start_percent": 0.15, "end_percent": 0.9,
+                                     "max_steps": 2, "device": "auto", "verbose": False}}
+    return graph
+
+
+def post(url: str, payload: dict) -> dict:
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def get(url: str) -> dict:
+    with urllib.request.urlopen(url) as response:
+        return json.load(response)
+
+
+def run_once(base: str, graph: dict, label: str, timeout: float) -> dict:
+    client = str(uuid.uuid4())
+    started = time.perf_counter()
+    result = post(f"{base}/prompt", {"prompt": graph, "client_id": client})
+    prompt_id = result["prompt_id"]
+    print(f"[{label}] zakolejkowane, prompt_id={prompt_id}", flush=True)
+
+    deadline = started + timeout
+    while time.perf_counter() < deadline:
+        history = get(f"{base}/history/{prompt_id}")
+        entry = history.get(prompt_id)
+        if entry and entry.get("status", {}).get("completed") is not None:
+            elapsed = time.perf_counter() - started
+            status = entry["status"]
+            if not status.get("completed"):
+                raise RuntimeError(f"[{label}] wykonanie nieudane: "
+                                   f"{json.dumps(status)[:800]}")
+            return {"label": label, "wall_s": elapsed, "prompt_id": prompt_id,
+                    "outputs": entry.get("outputs", {})}
+        time.sleep(1.0)
+    raise TimeoutError(f"[{label}] przekroczono {timeout:.0f} s")
+
+
+def compare_frames(off: dict, on: dict) -> None:
+    """PSNR miedzy klatkami obu wariantow.
+
+    Sol-Attn to aproksymacja, wiec identycznosci nie oczekujemy — chodzi o to,
+    czy trajektoria pozostala rozpoznawalnie ta sama.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+    except ImportError as exc:
+        print(f"\nPorownanie klatek pominiete: {exc}")
+        return
+
+    root = pathlib.Path.home() / "comfyX" / "ComfyUI" / "output"
+    pairs = []
+    for a, b in zip(sorted(_frames(off, root)), sorted(_frames(on, root))):
+        x = np.asarray(Image.open(a), dtype=np.float64)
+        y = np.asarray(Image.open(b), dtype=np.float64)
+        if x.shape != y.shape:
+            print(f"\nPorownanie klatek pominiete: rozne ksztalty {x.shape} vs {y.shape}")
+            return
+        mse = float(((x - y) ** 2).mean())
+        psnr = float("inf") if mse == 0 else 10 * math.log10(255.0 ** 2 / mse)
+        pairs.append((psnr, float(np.abs(x - y).max())))
+    if not pairs:
+        print("\nPorownanie klatek pominiete: brak zapisanych klatek")
+        return
+    psnrs = [p for p, _ in pairs]
+    print(f"\nPorownanie klatek off vs on ({len(pairs)} klatek):")
+    print(f"  PSNR: min={min(psnrs):.2f} dB  sredni={sum(psnrs) / len(psnrs):.2f} dB  "
+          f"max={max(psnrs):.2f} dB")
+    print(f"  najwieksza roznica na pikselu: {max(d for _, d in pairs):.0f}/255")
+
+
+def _frames(result: dict, root: pathlib.Path):
+    for node in result.get("outputs", {}).values():
+        for image in node.get("images", []):
+            yield root / image.get("subfolder", "") / image["filename"]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8199)
+    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=384)
+    parser.add_argument("--length", type=int, default=73)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--sampler", default="res_multistep")
+    parser.add_argument("--unet", default="minimax_h3_fl2va_pruned_int8_convrot.safetensors")
+    parser.add_argument("--clip", default="qwen3vl_32b_minimax_h3_int8_convrot.safetensors")
+    parser.add_argument("--vae", default="minimax_h3_video_vae_fp16.safetensors")
+    parser.add_argument("--tau", type=float, default=1.0)
+    parser.add_argument("--thresh-type", default="diag")
+    parser.add_argument("--first-dense-steps", type=float, default=0.2)
+    parser.add_argument("--first-dense-layers", type=int, default=2)
+    parser.add_argument("--sink-mode", default="prefix")
+    parser.add_argument("--gate", action="store_true", default=True)
+    parser.add_argument("--strict", action="store_true", default=False)
+    parser.add_argument("--timeout", type=float, default=5400)
+    parser.add_argument("--cache", action="store_true",
+                        help="wepnij MiniMaxH3Cache za wezlem — test kompozycji")
+    parser.add_argument("--only", choices=["on", "off"], default=None,
+                        help="uruchom tylko jeden wariant")
+    args = parser.parse_args()
+
+    base = f"http://127.0.0.1:{args.port}"
+    variants = [("off", False), ("on", True)]
+    if args.only:
+        variants = [v for v in variants if v[0] == args.only]
+
+    results = []
+    for label, enabled in variants:
+        results.append(run_once(base, build_graph(args, enabled=enabled), label, args.timeout))
+        print(f"[{label}] czas end-to-end: {results[-1]['wall_s']:.1f} s", flush=True)
+
+    print("\n=== WYNIK ===")
+    for row in results:
+        print(f"{row['label']:>4}: {row['wall_s']:8.1f} s   {json.dumps(row['outputs'])[:200]}")
+    if len(results) == 2:
+        off, on = results[0]["wall_s"], results[1]["wall_s"]
+        print(f"\nend-to-end: {off / on:.3f}x "
+              f"({'szybciej' if on < off else 'wolniej'} z nodem)")
+    if len(results) == 2:
+        compare_frames(results[0], results[1])
+    print("\nCzas samej uwagi i statystyki routingu sa w logu ComfyUI "
+          "(linie [sol-attn-h3]).")
+
+
+if __name__ == "__main__":
+    main()
