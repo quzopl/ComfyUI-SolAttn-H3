@@ -19,17 +19,21 @@ silently.
   <img alt="Benchmark: Sol-Attn vs SDPA vs SageAttention, and end-to-end in ComfyUI" src="docs/images/benchmark-light.png">
 </picture>
 
-All numbers below were measured on an **RTX 4070 Ti (SM89, Triton backend)** —
-the *slowest* supported path. SM90/SM100/SM120 get CuTe DSL kernels, which this
-machine cannot exercise. Do not transfer these numbers to other GPUs; run
-`selftest.py` on yours instead.
+Unless a section says otherwise, the numbers below were measured on an
+**RTX 4070 Ti (SM89, Triton backend)** — the *slowest* supported path.
+SM90/SM100/SM120 get CuTe DSL kernels instead; for one such card see
+[SM120 — RTX PRO 6000 Blackwell](#sm120--rtx-pro-6000-blackwell-cute-dsl),
+where the comparison against SageAttention comes out the other way round. Do not
+transfer any of these numbers to your own GPU; run `selftest.py` on it instead.
 
 > ### ⚠️ Read this before you expect a speedup
 >
 > **The baseline you compare against decides the outcome.** Everything in this
 > section is measured against ComfyUI's `pytorch attention` (SDPA). Against
 > **SageAttention** on the same card, at the default `tau=1.0`, this node is a
-> **net loss**:
+> **net loss** — this is the Triton backend, so it applies to SM80–SM89; on the
+> CuTe DSL path the result reverses, see
+> [SM120](#sm120--rtx-pro-6000-blackwell-cute-dsl):
 >
 > | Baseline (seq 17 504, 20 steps, SM89) | ms per attention call | End-to-end |
 > |---|---:|---:|
@@ -46,6 +50,37 @@ machine cannot exercise. Do not transfer these numbers to other GPUs; run
 > **Gains at `tau=1.0` are not guaranteed. Check `attn_ms_per_call` in your own
 > log before assuming any.** The levers that do produce a win — a higher `tau`,
 > or `sink_mode=text` — trade quality; see [Tuning](#tuning-when-the-default-loses).
+
+### SM120 — RTX PRO 6000 Blackwell (CuTe DSL)
+
+Kernel only, `selftest.py`, 56 heads, head_dim 128, `tau=1.0`, `thresh_type=diag`,
+`sink_mode=prefix`. torch 2.13.0+cu130, CUDA 13.0, SageAttention 2.2.0 built from
+source for `sm_120` (no prebuilt wheel exists for Blackwell on CUDA 13). Backend
+picked automatically: `cute_sm120`.
+
+| Sequence | Gate | Density | Sol-Attn | SDPA | SageAttention | vs SDPA | vs Sage |
+|---:|:--:|---:|---:|---:|---:|---:|---:|
+| 8 192 | PASS | 0.271 | 1.97 ms | 5.88 ms | 3.63 ms | 3.00× | 1.85× |
+| 16 384 | PASS | 0.214 | 5.53 ms | 21.99 ms | 12.50 ms | 3.98× | 2.26× |
+| 30 976 | PASS | 0.186 | 16.58 ms | 77.45 ms | 42.23 ms | 4.67× | **2.55×** |
+
+**The warning above does not hold on this backend.** On Triton, Sol-Attn loses to
+SageAttention at the default `tau=1.0`; on CuTe DSL it wins by 1.85–2.55×, and
+the margin widens with sequence length. Nothing was tuned to get that — it is the
+stock `tau=1.0` policy, the one the SM89 section has to trade quality to beat.
+
+The correctness gate passes at every length: `rel_l2` ≈ 0.0031 against a limit of
+0.005, `max_abs` ≤ 1.2e-4. First call costs 2.9–3.3 s of kernel compilation. The
+BTHD copies that dominate the SM89 analysis cost 0.53–1.97 ms here, shrinking from
+27 % of kernel time at 8 192 rows to 12 % at 30 976.
+
+Two back-to-back runs on an otherwise idle card; the table is their mean and the
+raw timings agreed to within 2 % on every cell. Repeating the same benchmark while
+an unrelated training job shared the GPU roughly doubled every absolute time while
+leaving the ratios intact — so measure on a quiet card if you want the absolute
+numbers to mean anything.
+
+These are kernel-only figures; no end-to-end ComfyUI run was measured on this card.
 
 ### End-to-end, MiniMax-H3 in ComfyUI
 
@@ -69,7 +104,7 @@ control for the measurement itself — the instrumentation does not skew results
 Attention accounts for **59 %** of step time here (45.5 s of 76 s sampling), so
 kernel speedup translates to wall clock in a sane proportion.
 
-### Kernel only, synthetic QKV (`selftest.py`)
+### Kernel only, synthetic QKV (`selftest.py`) — SM89 / Triton
 
 56 heads, head_dim 128, `tau=1.0`, `thresh_type=diag`:
 
