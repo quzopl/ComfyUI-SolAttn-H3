@@ -33,3 +33,22 @@ def test_table_matches_released_kernel():
     interface = pytest.importorskip("sol_attn.interface")
     for arch, expected in interface._CUTE_BACKENDS.items():
         assert backend_for_arch(arch, True) == expected
+
+
+def test_probe_agrees_with_the_public_resolver():
+    """`probe()` must report what the kernel will actually dispatch to.
+
+    Upstream exposes `get_sol_attn_backend`; our own table is only the offline
+    fallback. If the two ever disagree, the node would advertise one backend and
+    run another.
+    """
+    from solattn_h3.kernel import probe
+
+    found = probe()
+    if not found.available:
+        pytest.skip(f"kernel unavailable: {found.error}")
+    sol_attn = pytest.importorskip("sol_attn")
+    resolver = getattr(sol_attn, "get_sol_attn_backend", None)
+    if resolver is None:
+        pytest.skip("this sol-attn release has no public resolver")
+    assert found.backend == resolver()

@@ -273,6 +273,24 @@ and a loss on SM89. The node prints the selected backend when it mounts;
 
 ## Installation
 
+### One command
+
+From your ComfyUI directory:
+
+```bash
+curl -sSLO https://raw.githubusercontent.com/quzopl/ComfyUI-SolAttn-H3/master/install.sh
+bash install.sh
+```
+
+The script checks torch, CUDA, Triton and the GPU's compute capability **before**
+changing anything, then fetches the node, fetches the Sol-Attn kernel from
+NVlabs/Sana, installs it plus the CuTe DSL runtime into ComfyUI's own Python
+environment, and prints the backend you ended up with. `--no-cute` skips the CuTe
+runtime, `--skip-selftest` skips the closing benchmark, `--comfyui PATH` points it
+at a ComfyUI it cannot autodetect.
+
+### By hand
+
 ```bash
 git clone https://github.com/quzopl/ComfyUI-SolAttn-H3 \
   ComfyUI/custom_nodes/ComfyUI-SolAttn-H3

@@ -85,10 +85,25 @@ def probe(device=None) -> Probe:
     arch = tuple(torch.cuda.get_device_capability(device))
     cute = cute_runtime_available()
     try:
-        backend = backend_for_arch(arch, cute)
+        backend = _resolve_backend(arch, cute, device)
     except RuntimeError as exc:
         return Probe(arch, cute, None, False, str(exc))
     return Probe(arch, cute, backend, True)
+
+
+def _resolve_backend(arch: tuple[int, int], cute: bool, device) -> str:
+    """Ask the kernel which backend it will use, falling back to our own table.
+
+    `get_sol_attn_backend` became public upstream in August 2026 and is the
+    authority: it resolves the same way the kernel does at call time, and it
+    knows about non-CUDA devices. Our table stays as the offline answer (the
+    unit tests run without a GPU) and as the drift guard.
+    """
+    try:
+        from sol_attn import get_sol_attn_backend
+    except ImportError:
+        return backend_for_arch(arch, cute)
+    return get_sol_attn_backend(device)
 
 
 def load_sol_attn():
