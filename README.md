@@ -39,6 +39,15 @@ transfer any of these numbers to your own GPU; run `selftest.py` on it instead.
 >
 > First-call compilation drops from 13.4 s to 3.2 s, and the margin widens with
 > sequence length: **1.21×** at 31 650 rows, **1.32×** at 45 241.
+>
+> End-to-end on the real model with the CuTe backend (seq 17 504, 20 steps,
+> SageAttention baseline) came out at 161.3 s → 151.0 s. **Do not read that as a
+> 1.07× win**: the attention accounting does not support it. The `off` run spent
+> 1000 × 43.40 ms = 43.4 s in attention, the `on` run 768 × 42.54 + 232 × 43.28 +
+> 3.4 s of compilation = 46.1 s — *more*, not less. At this shape, with a 494-row
+> sink, the CuTe kernel buys parity with SageAttention (42.54 vs 43.28 ms per
+> call), and the 10 s difference in wall clock is run-to-run noise on a
+> memory-pressured card. The real wins are at the longer sequences above.
 
 > ### ⚠️ Read this before you expect a speedup
 >
