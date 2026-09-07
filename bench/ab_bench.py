@@ -72,13 +72,16 @@ def build_graph(args, *, enabled: bool) -> dict:
                    "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]}},
         "save": {"class_type": "SaveImage",
                  "inputs": {"images": ["decode", 0],
-                            "filename_prefix": f"solattn_ab/{'on' if enabled else 'off'}"}},
+                            "filename_prefix":
+                                f"solattn_ab/{args.tag or ('on' if enabled else 'off')}"}},
     }
     if args.cache:
         graph["cache"] = {"class_type": "MiniMaxH3Cache",
-                          "inputs": {"model": ["solattn", 0], "resuse_threshold": 0.1,
+                          "inputs": {"model": ["solattn", 0],
+                                     "resuse_threshold": args.cache_threshold,
                                      "start_percent": 0.15, "end_percent": 0.9,
-                                     "max_steps": 2, "device": "auto", "verbose": False}}
+                                     "max_steps": args.cache_max_steps,
+                                     "device": "auto", "verbose": False}}
     return graph
 
 
@@ -177,6 +180,12 @@ def main() -> None:
     parser.add_argument("--gate", action="store_true", default=True)
     parser.add_argument("--strict", action="store_true", default=False)
     parser.add_argument("--timeout", type=float, default=5400)
+    parser.add_argument("--cache-max-steps", type=int, default=2,
+                        help="MiniMaxH3Cache: max consecutive skipped forwards "
+                             "(NVIDIA's validated H3 recipe uses 5)")
+    parser.add_argument("--cache-threshold", type=float, default=0.10)
+    parser.add_argument("--tag", default=None,
+                        help="filename prefix for the saved frames")
     parser.add_argument("--cache", action="store_true",
                         help="chain MiniMaxH3Cache after the node - composition test")
     parser.add_argument("--only", choices=["on", "off"], default=None,
