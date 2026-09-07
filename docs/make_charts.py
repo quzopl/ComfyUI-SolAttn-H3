@@ -1,8 +1,11 @@
-"""Builds the README charts from measurements taken on an RTX 4070 Ti (SM89 / Triton).
+"""Builds the README charts from selftest.py runs on two GPUs.
 
-Every number comes from a real run:
-  * panel A — selftest.py on synthetic QKV, 56 heads, head_dim 128
-  * panel B — MiniMax-H3 in ComfyUI, 864x480x125 (17504-row sequence), 8 steps
+Both panels are the same measurement at the same sequence lengths, so they are
+directly comparable: kernel-only time per attention call, 56 heads, head_dim 128,
+tau=1.0, thresh_type=diag, on the CuTe DSL backend each card resolves to.
+
+  * panel A — RTX 4070 Ti, cute_sm89
+  * panel B — RTX PRO 6000 Blackwell, cute_sm120
 
 Colour is bound to the entity rather than to a position within the group:
 Sol-Attn is always blue, SDPA orange, SageAttention aqua — in both panels.
@@ -33,18 +36,18 @@ THEMES = {
     },
 }
 
-# Panel A: ms per attention call, synthetic QKV (selftest.py)
-KERNEL_X = ["8 192", "16 384", "30 976"]
-KERNEL = {
-    "Sol-Attn": [10.2, 31.7, 99.6],
-    "SDPA": [26.4, 105.4, 380.0],
-    "SageAttention": [11.2, 40.0, 133.6],
+LENGTHS = ["8 192", "16 384", "30 976"]
+# Panel A: RTX 4070 Ti, backend cute_sm89
+SM89 = {
+    "Sol-Attn": [8.70, 27.42, 79.55],
+    "SDPA": [26.06, 106.49, 373.51],
+    "SageAttention": [11.40, 39.81, 131.57],
 }
-# Panel B: seconds, MiniMax-H3 in ComfyUI, 17504-row sequence, 8 steps
-REAL_X = ["End-to-end", "Attention only"]
-REAL = {
-    "SDPA": [116.1, 45.5],     # node disabled - ComfyUI default attention
-    "Sol-Attn": [84.2, 26.8],  # node enabled
+# Panel B: RTX PRO 6000 Blackwell, backend cute_sm120
+SM120 = {
+    "Sol-Attn": [1.97, 5.53, 16.58],
+    "SDPA": [5.88, 21.99, 77.45],
+    "SageAttention": [3.63, 12.50, 42.23],
 }
 
 
@@ -90,34 +93,22 @@ def _grouped(ax, theme, categories, series, *, label_series, fmt, speedup_vs=Non
 def build(mode: str) -> pathlib.Path:
     theme = THEMES[mode]
     fig, (left, right) = plt.subplots(1, 2, figsize=(11.2, 4.3), dpi=200,
-                                      gridspec_kw={"width_ratios": [1.35, 1]})
+                                      gridspec_kw={"width_ratios": [1, 1]})
     fig.patch.set_facecolor(theme["surface"])
 
-    _grouped(left, theme, KERNEL_X, KERNEL, label_series="Sol-Attn",
-             fmt=lambda v: f"{v:.0f}", speedup_vs="SDPA")
-    _style(left, theme, ylabel="ms per attention call")
-    left.set_title("Kernel, synthetic QKV — 56 heads, head_dim 128",
-                   color=theme["primary"], fontsize=10.5, fontweight="semibold",
-                   loc="left", pad=12)
-    left.set_xlabel("sequence length (rows)", color=theme["secondary"], fontsize=9,
-                    labelpad=6)
-    left.yaxis.set_major_locator(MultipleLocator(100))
-    left.set_ylim(0, 440)
-
-    _grouped(right, theme, REAL_X, REAL, label_series="Sol-Attn",
-             fmt=lambda v: f"{v:.1f} s")
-    _style(right, theme, ylabel="seconds")
-    right.set_title("MiniMax-H3 in ComfyUI — 864x480, 125 frames, 8 steps",
-                    color=theme["primary"], fontsize=10.5, fontweight="semibold",
-                    loc="left", pad=12)
-    right.set_xlabel("node disabled (SDPA)  vs  node enabled (Sol-Attn)",
-                     color=theme["secondary"], fontsize=9, labelpad=6)
-    right.set_ylim(0, 140)
-    # The speedup ratio above each pair - that is the panel's actual message.
-    for index, (off, on) in enumerate(zip(REAL["SDPA"], REAL["Sol-Attn"])):
-        right.annotate(f"{off / on:.2f}x faster", (index, max(off, on)),
-                       textcoords="offset points", xytext=(0, 22), ha="center",
-                       fontsize=10, fontweight="semibold", color=theme["primary"])
+    for ax, data, title, top, tick in (
+        (left, SM89, "RTX 4070 Ti — backend cute_sm89", 430, 100),
+        (right, SM120, "RTX PRO 6000 Blackwell — backend cute_sm120", 90, 20),
+    ):
+        _grouped(ax, theme, LENGTHS, data, label_series="Sol-Attn",
+                 fmt=lambda v: f"{v:.1f}", speedup_vs="SageAttention")
+        _style(ax, theme, ylabel="ms per attention call")
+        ax.set_title(title, color=theme["primary"], fontsize=10.5,
+                     fontweight="semibold", loc="left", pad=12)
+        ax.set_xlabel("sequence length (rows)", color=theme["secondary"],
+                      fontsize=9, labelpad=6)
+        ax.yaxis.set_major_locator(MultipleLocator(tick))
+        ax.set_ylim(0, top)
 
     handles, labels = left.get_legend_handles_labels()
     legend = fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
@@ -127,7 +118,8 @@ def build(mode: str) -> pathlib.Path:
         text.set_color(theme["secondary"])
 
     fig.text(0.008, 0.965,
-             "Measured on RTX 4070 Ti (SM89, Triton backend) — the slowest supported path",
+             "selftest.py, kernel only — 56 heads, head_dim 128, tau=1.0, diag. "
+             "Labels on the Sol-Attn bars are the speedup against SageAttention.",
              color=theme["secondary"], fontsize=9)
     fig.tight_layout(rect=(0, 0.07, 1, 0.93))
 

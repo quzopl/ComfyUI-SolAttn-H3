@@ -16,14 +16,13 @@ silently.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.png">
-  <img alt="Benchmark: Sol-Attn vs SDPA vs SageAttention, and end-to-end in ComfyUI" src="docs/images/benchmark-light.png">
+  <img alt="Kernel time per attention call on RTX 4070 Ti (cute_sm89) and RTX PRO 6000 Blackwell (cute_sm120), Sol-Attn against SDPA and SageAttention at three sequence lengths" src="docs/images/benchmark-light.png">
 </picture>
 
-Unless a section says otherwise, the numbers below were measured on an
-**RTX 4070 Ti (SM89)**. For a CuTe DSL card see
-[SM120 — RTX PRO 6000 Blackwell](#sm120--rtx-pro-6000-blackwell-cute-dsl),
-where the comparison against SageAttention comes out the other way round. Do not
-transfer any of these numbers to your own GPU; run `selftest.py` on it instead.
+The chart is `selftest.py` on two cards at identical settings: kernel time per
+attention call, `tau=1.0`, on the CuTe backend each one resolves to. Every table
+below states its card **and its backend**, because both change the answer. Do not
+transfer any of these numbers to your own GPU — run `selftest.py` on it instead.
 
 > **Upstream update, August 2026.** NVIDIA added a **CuTe DSL kernel for SM89**
 > ([`9cfdd07`](https://github.com/NVlabs/Sana/commit/9cfdd07)), so Ada is no
@@ -107,11 +106,16 @@ numbers to mean anything.
 
 These are kernel-only figures; no end-to-end ComfyUI run was measured on this card.
 
-### End-to-end, MiniMax-H3 in ComfyUI
+### End-to-end, MiniMax-H3 in ComfyUI — SDPA baseline, Triton backend
+
+**Scope:** this is the oldest measurement in the file and the most flattering
+one, because both its baseline and its backend are the weak options: ComfyUI's
+default `pytorch attention` against the Triton kernel. Kept because it is the
+only full end-to-end A/B with per-call instrumentation. For the same run against
+SageAttention see the box at the top; for the CuTe backend see the tables above.
 
 864×480, 125 frames (**17 504**-row packed sequence), 8 steps, `res_multistep`,
-int8 `fl2va` weights. Baseline is ComfyUI's own default attention in this
-install — `pytorch attention` (SDPA). Measurement pass after warm-up:
+int8 `fl2va` weights. Measurement pass after warm-up:
 
 | Metric | Node off | Node on | Ratio |
 |---|---:|---:|---:|
@@ -129,24 +133,39 @@ control for the measurement itself — the instrumentation does not skew results
 Attention accounts for **59 %** of step time here (45.5 s of 76 s sampling), so
 kernel speedup translates to wall clock in a sane proportion.
 
-### Kernel only, synthetic QKV (`selftest.py`) — SM89 / Triton
+### SM89 — RTX 4070 Ti, both backends
 
-56 heads, head_dim 128, `tau=1.0`, `thresh_type=diag`:
+Same measurement as the SM120 table above, so the two are directly comparable.
+`selftest.py`, kernel only, 56 heads, head_dim 128, `tau=1.0`, `thresh_type=diag`.
+
+**`cute_sm89`** — what you get with the CuTe runtime installed:
 
 | Sequence | Gate | Density | Sol-Attn | SDPA | SageAttention | vs SDPA | vs Sage |
 |---:|:--:|---:|---:|---:|---:|---:|---:|
-| 5 548 | PASS | 0.231 | — | — | — | 2.75× | 1.27× |
+| 8 192 | PASS | 0.272 | 8.70 ms | 26.06 ms | 11.40 ms | 3.00× | 1.31× |
+| 16 384 | PASS | 0.214 | 27.42 ms | 106.49 ms | 39.81 ms | 3.88× | 1.45× |
+| 30 976 | PASS | 0.186 | 79.55 ms | 373.51 ms | 131.57 ms | **4.70×** | **1.65×** |
+
+**`triton`** — the fallback when any of the three CuTe packages is missing:
+
+| Sequence | Gate | Density | Sol-Attn | SDPA | SageAttention | vs SDPA | vs Sage |
+|---:|:--:|---:|---:|---:|---:|---:|---:|
 | 8 192 | PASS | 0.271 | 10.2 ms | 26.4 ms | 11.2 ms | 2.58× | 1.09× |
 | 16 384 | PASS | 0.214 | 31.7 ms | 105.4 ms | 40.0 ms | 3.32× | 1.26× |
-| 30 976 | PASS | 0.186 | 99.6 ms | 380.0 ms | 133.6 ms | **3.82×** | **1.34×** |
+| 30 976 | PASS | 0.186 | 99.6 ms | 380.0 ms | 133.6 ms | 3.82× | 1.34× |
 
-Routing density falls as the sequence grows — **the longer the video, the more
-Sol-Attn pays off.**
+Two things to read off these tables. Routing density falls as the sequence grows,
+so **the longer the video, the more Sol-Attn pays off** — on both backends and
+both cards. And the speedup against **SDPA is nearly identical on SM89 and SM120**
+(3.00/3.88/4.70 against 3.00/3.98/4.67): that ratio measures the sparsity itself,
+which is architecture-independent. The gap against SageAttention differs only
+because Sage is relatively stronger on Ada than on Blackwell.
 
 ### One-off costs
 
-First sparse call in a process: **13.4 s** (Triton kernel compilation) plus the
-correctness gate and density probe. With a warm cache it drops to **0.38 s**.
+First sparse call in a process, including the correctness gate and the density
+probe: **3.2 s** on `cute_sm89`, **13.4 s** on `triton`. With a warm compile cache
+both drop to well under a second (measured 0.05–0.38 s).
 
 **Triton compiles per sequence shape, not once per process.** Every new
 resolution or frame count pays that cost again, and on short runs it can eat the
@@ -212,7 +231,13 @@ the sparse path itself produces. More aggressive caching is not free.
 
 ---
 
-## Tuning: when the default loses
+## Tuning
+
+**Scope:** the table below was measured on the **Triton** backend, where the
+default configuration loses to SageAttention. On `cute_sm89` the default already
+wins (1.06× at seq 20 530, 1.32× at 45 241) and these levers are optional. Reach
+for them when you are stuck on Triton, or when you want more than the default on
+a short sequence.
 
 Two levers move the cost materially. Both trade quality, so neither is a default.
 Measured in isolation at seq 20 530, 56 heads, against SageAttention (~56.5 ms):
