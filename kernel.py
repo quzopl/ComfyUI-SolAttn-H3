@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 # Architectures with a released CuTe DSL kernel. Everything else >= SM80 uses Triton.
 CUTE_BACKENDS = {
+    (8, 9): "cute_sm89",     # RTX 4090, RTX 4070 Ti and the rest of Ada
     (9, 0): "cute_sm90",     # H100
     (10, 0): "cute_sm100",   # B200 / GB200
     (12, 0): "cute_sm120",   # RTX 5090, RTX PRO 6000 Blackwell

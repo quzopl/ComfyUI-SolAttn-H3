@@ -20,19 +20,35 @@ silently.
 </picture>
 
 Unless a section says otherwise, the numbers below were measured on an
-**RTX 4070 Ti (SM89, Triton backend)** — the *slowest* supported path.
-SM90/SM100/SM120 get CuTe DSL kernels instead; for one such card see
+**RTX 4070 Ti (SM89)**. For a CuTe DSL card see
 [SM120 — RTX PRO 6000 Blackwell](#sm120--rtx-pro-6000-blackwell-cute-dsl),
 where the comparison against SageAttention comes out the other way round. Do not
 transfer any of these numbers to your own GPU; run `selftest.py` on it instead.
+
+> **Upstream update, August 2026.** NVIDIA added a **CuTe DSL kernel for SM89**
+> ([`9cfdd07`](https://github.com/NVlabs/Sana/commit/9cfdd07)), so Ada is no
+> longer restricted to the Triton research implementation. The SM89 sections
+> below were measured on Triton and are kept because they still describe what
+> you get when the CuTe runtime is missing — which is the default, since it is
+> not installed automatically. Re-measured on the same card with `cute_sm89`:
+>
+> | seq 20 530, sink 1 495, `tau=1.0` | kernel | full sparse path | vs SageAttention |
+> |---|---:|---:|---:|
+> | Triton | 57.3 ms | 83.4 ms | **0.78×** (slower) |
+> | **CuTe SM89** | **39.9 ms** | **53.3 ms** | **1.06×** |
+>
+> First-call compilation drops from 13.4 s to 3.2 s, and the margin widens with
+> sequence length: **1.21×** at 31 650 rows, **1.32×** at 45 241.
 
 > ### ⚠️ Read this before you expect a speedup
 >
 > **The baseline you compare against decides the outcome.** Everything in this
 > section is measured against ComfyUI's `pytorch attention` (SDPA). Against
 > **SageAttention** on the same card, at the default `tau=1.0`, this node is a
-> **net loss** — this is the Triton backend, so it applies to SM80–SM89; on the
-> CuTe DSL path the result reverses, see
+> **net loss** — this is the **Triton** backend, i.e. what you get on any
+> architecture when the CuTe runtime is not installed. On the CuTe DSL path the
+> result reverses on both cards measured: 1.06× on
+> [SM89](#results) and 1.85–2.55× on
 > [SM120](#sm120--rtx-pro-6000-blackwell-cute-dsl):
 >
 > | Baseline (seq 17 504, 20 steps, SM89) | ms per attention call | End-to-end |
@@ -229,19 +245,22 @@ at the same seed.
 | PyTorch | ≥ 2.10 |
 | CUDA | ≥ 12.8 |
 | Triton | ≥ 3.6 |
-| CuTe DSL | optional: `cutlass-python` ≥ 4.5 + `cuda-python` |
+| CuTe DSL | **strongly recommended**: `nvidia-cutlass-dsl` ≥ 4.5, `cuda-python`, `apache-tvm-ffi` |
 
 Backend is selected automatically from the GPU architecture:
 
 | Architecture | Example | Backend |
 |---|---|---|
+| SM89 | RTX 4090, RTX 4070 Ti | CuTe DSL |
 | SM90 | H100 | CuTe DSL |
 | SM100 | B200 / GB200 | CuTe DSL |
 | SM120 | RTX 5090, RTX PRO 6000 Blackwell | CuTe DSL |
-| SM80 / SM86 / SM89 | A100, RTX 3090, RTX 4090 | Triton |
+| SM80 / SM86 | A100, RTX 3090 | Triton |
 
-Missing `cutlass.cute` or `cuda-python` falls back to Triton regardless of
-architecture. The node prints the selected backend when it mounts.
+Missing any of `cutlass.cute`, `cuda-python` or `tvm_ffi` falls back to Triton
+regardless of architecture — and that fallback is the difference between a win
+and a loss on SM89. The node prints the selected backend when it mounts;
+`backend=triton` on an SM89+ card means one of those three packages is absent.
 
 ## Installation
 
@@ -253,6 +272,12 @@ git clone https://github.com/quzopl/ComfyUI-SolAttn-H3 \
 git clone --branch sol-engine --depth 1 https://github.com/NVlabs/Sana.git ~/sana-sol-engine
 uv pip install --python ComfyUI/venv/bin/python \
   -e ~/sana-sol-engine/techniques/sparse_backends
+
+# The CuTe DSL runtime. Skipping it drops every architecture to Triton, which on
+# SM89 turns a 1.06x win into a 0.78x loss. apache-tvm-ffi is needed too and the
+# upstream docs do not mention it.
+uv pip install --python ComfyUI/venv/bin/python \
+  "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi
 ```
 
 Check your environment without launching ComfyUI:
