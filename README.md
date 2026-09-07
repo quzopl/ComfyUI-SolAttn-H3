@@ -179,6 +179,37 @@ the sparse path still ran 336 times. Wall clock: 39.1 s → **20.0 s**.
 This is precisely why the step index is read from `sample_sigmas` rather than
 counted: **a forward counter would drift on every skipped step.**
 
+#### The cache is the bigger lever — and `max_steps` is not what tunes it
+
+NVIDIA's validated H3 recipe is identical for SM89 and SM120
+(`config/minimax_h3/rtx4090_fullopt.toml`, `rtx5090_fullopt.toml`) and it matches
+this node's defaults exactly: `tau=1.0`, `thresh_type=diag`, 10 dense steps out
+of 50, 2 dense layers, gate on. Its cache arm is TeaCache with threshold `0.10`,
+5 retained steps and 1 cooldown step. In their controlled attribution run on a
+4090 the cache was worth **3.18×** and Sol-Attn a further **1.22×** — the cache
+does the heavy lifting.
+
+`ComfyUI-MiniMaxH3-Cache` maps onto that recipe one-to-one: `resuse_threshold`
+is the threshold (already 0.10), `max_steps` counts consecutive skipped forwards
+and resets after each real one, so the cooldown of 1 is implicit. Only
+`max_steps` differs — the node ships 2 against NVIDIA's 5. Measured here at
+864×480, 125 frames, 20 steps, Sol-Attn on the CuTe backend throughout:
+
+| `max_steps` | forwards skipped | attention calls | end-to-end |
+|---:|---:|---:|---:|
+| 2 (node default) | 11 of 20 | 450 | 101.2 s |
+| 5 (NVIDIA) | 12 of 20 | 400 | **79.1 s** |
+
+**Read that carefully.** Raising `max_steps` bought exactly *one* extra skipped
+forward — the binding constraint is the accumulated-`rel_l1` threshold, not the
+consecutive-skip cap. Of the 22 s difference, roughly 6 s is that forward, 3 s is
+a warm kernel-compile cache in the second run and 2 s is attention; the rest is
+the same run-to-run noise this card shows everywhere. Treat 1.28× as an upper
+bound, not a result.
+
+Frames between the two settings compare at 23.4 dB — the same order of divergence
+the sparse path itself produces. More aggressive caching is not free.
+
 ---
 
 ## Tuning: when the default loses
