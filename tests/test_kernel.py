@@ -7,10 +7,11 @@ from solattn_h3.kernel import backend_for_arch
     ((9, 0), True, "cute_sm90"),
     ((10, 0), True, "cute_sm100"),
     ((12, 0), True, "cute_sm120"),
+    ((8, 9), True, "cute_sm89"),    # Ada gained a CuTe kernel upstream in Aug 2026
     ((9, 0), False, "triton"),      # no CuTe -> Triton, specialized architecture or not
     ((12, 0), False, "triton"),
-    ((8, 9), True, "triton"),       # Ada has no CuTe kernel
-    ((8, 6), True, "triton"),
+    ((8, 9), False, "triton"),
+    ((8, 6), True, "triton"),       # Ampere consumer has no CuTe kernel
     ((8, 0), True, "triton"),
 ])
 def test_backend_for_arch(arch, cute, expected):
