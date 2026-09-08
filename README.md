@@ -133,6 +133,36 @@ control for the measurement itself — the instrumentation does not skew results
 Attention accounts for **59 %** of step time here (45.5 s of 76 s sampling), so
 kernel speedup translates to wall clock in a sane proportion.
 
+### SM89 — NVIDIA L40 (CuTe DSL)
+
+`selftest.py` on a datacentre Ada card, 48 GB, driver 580.126.20. torch
+2.14.0+cu130, CUDA 13.0, SageAttention 2.2.0 built from source for `sm_89`.
+Backend picked automatically: `cute_sm89`.
+
+| Sequence | Gate | Density | Sol-Attn | SDPA | SageAttention | vs SDPA | vs Sage |
+|---:|:--:|---:|---:|---:|---:|---:|---:|
+| 8 192 | PASS | 0.271 | 3.93 ms | 13.02 ms | 5.77 ms | 3.32× | 1.47× |
+| 16 384 | PASS | 0.214 | 13.40 ms | 50.00 ms | 24.63 ms | 3.73× | **1.84×** |
+
+Densities match the 4070 Ti to three decimals, as they must — routing is a
+property of the model, not the card. First call 7.7 s. Gate `max_abs` 1.2e-4,
+`rel_l2` 0.0032. BTHD copies 1.81 ms, 13.5 % of kernel time at 16 384 rows.
+
+**End-to-end on the same card**, MiniMax-H3 at 1344×768, 107 frames, 20 steps,
+`res_multistep`, int8 `fl2va` + int8 text encoder:
+
+| Attention backend | Wall clock | vs SDPA |
+|---|---:|---:|
+| PyTorch SDPA | 353.0 s | — |
+| SageAttention (`--use-sage-attention`) | 251.5 s | 1.40× |
+| **Sol-Attn node** | **235.3 s** | **1.50×** |
+
+The end-to-end margin over SageAttention (1.07×) is much smaller than the
+kernel-only one (1.84×), and the reason is this card rather than the kernel:
+peak VRAM was 47.1 GB of 48, so the run is offload-bound and attention is a
+smaller share of wall clock than it is on a card with headroom. A kernel table
+is not a prediction of end-to-end gain — measure both.
+
 ### SM89 — RTX 4070 Ti, both backends
 
 Same measurement as the SM120 table above, so the two are directly comparable.
