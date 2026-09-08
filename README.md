@@ -386,6 +386,38 @@ a week of odd artifacts.
 | `sink_mode` | `prefix` | `prefix` keeps text + conditioning + audio exact. `text` reproduces the reference policy. |
 | `correctness_gate` | on | Once per shape, compares the kernel against SDPA on real QKV. A failure aborts generation. |
 | `strict` | off | Turns every unintended decline into an exception. For validation, not daily use. |
+| `kv_splits` | 1 | How many pieces the kernel splits the K/V axis into. **SM90 only** — see below. |
+
+### `kv_splits` is an H100 option
+
+The kernel takes it, but accepts anything above 1 on SM90 alone; elsewhere it
+raises `kv_splits=2/4 is currently available on SM90 only`. It raises from
+inside the sampler, on the first sparse call, with the text encoder and the
+transformer already resident — so the node checks the architecture when it
+mounts and refuses there instead. Every Sol-Engine config leaves this at 1.
+
+The correctness gate gets the same value as the production path. Above 1 the
+kernel reduces across split accumulators, which changes the summation order and
+so the rounding; gating at 1 would clear arithmetic that never runs.
+
+### Overriding from the environment
+
+Sol-Engine drives every setting from environment variables, so a config under
+`config/minimax_h3/` transfers here unchanged. When set, these win over the
+widgets:
+
+`SOL_ATTN_TAU`, `SOL_ATTN_THRESH_TYPE`, `SOL_ATTN_FIRST_DENSE_STEPS`,
+`SOL_ATTN_FIRST_DENSE_LAYERS`, `H3_SOL_SINK_MODE`, `SOL_ATTN_CORRECTNESS_GATE`,
+`SOL_ATTN_STRICT`, `SOL_ATTN_KV_SPLITS`.
+
+An unset variable changes nothing. A malformed one raises rather than leaving
+the widget's value quietly in place — a typo in `SOL_ATTN_THRESH_TYPE` that fell
+back to the widget would be the same class of bug as a sparse configuration
+silently running dense. Each override is logged with the value it replaced:
+
+```
+[sol-attn-h3] environment override SOL_ATTN_TAU=2.5 (widget had 1.0)
+```
 
 ### Why `sink_mode=prefix` rather than `text`
 
@@ -473,11 +505,23 @@ Three, each because ComfyUI exposes information the SGLang runtime did not:
 - **Contiguous copies:** H3 hands over Q/K/V as views into the packed `qkv_proj`
   buffer, so one copy is unavoidable — 3 × 424 MiB at 31 k rows, about 6.5 % of
   kernel time. Out of memory latches the run onto the dense path.
+- **`kv_splits` above 1 needs SM90.** The node refuses to mount elsewhere.
+- **Environment overrides do not invalidate ComfyUI's cache.** A node is cached
+  by its input values, and environment variables are not inputs. After changing
+  one, touch a widget or reload the workflow, or the previous patch is reused.
 
 ## Testing
 
+The suite does not run in place from `custom_nodes`: the repo has an
+`__init__.py` (ComfyUI requires one), so pytest tries to import the directory as
+a package and every test errors on a relative import. Mount it under a valid
+module name instead:
+
 ```bash
-ComfyUI/venv/bin/python -m pytest tests/ -q     # 74 tests
+rm -rf /tmp/h && mkdir -p /tmp/h
+cp -r ComfyUI/custom_nodes/ComfyUI-SolAttn-H3 /tmp/h/solattn_h3
+rm -rf /tmp/h/solattn_h3/.git
+cd /tmp/h && ComfyUI/venv/bin/python -m pytest solattn_h3/tests -q   # 79 tests
 ```
 
 `layout.py` and `state.py` are CUDA-free and unit-tested; `attention.py` and
