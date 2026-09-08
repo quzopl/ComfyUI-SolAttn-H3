@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .layout import SinkRange
+from .layout import SINK_MODES, SinkRange
 
 # Intended reasons — silent, counted only.
 DECLINE_DISABLED = "disabled"
@@ -48,6 +48,83 @@ class Policy:
     sink_mode: str = "prefix"
     correctness_gate: bool = True
     strict: bool = False
+    # How many pieces the kernel splits the K/V axis into. 1 is the reference
+    # line: every config under `config/minimax_h3/` leaves it at the default.
+    # Raising it adds parallelism when the grid is too small to fill the GPU,
+    # at the cost of a split reduction over the accumulator. Measured on an L40:
+    # the kernel rejects anything above 1 outside SM90 with
+    # "kv_splits=2/4 is currently available on SM90 only", so `nodes.py` refuses
+    # to mount rather than let that surface mid-sampling.
+    kv_splits: int = 1
+
+
+def _env_flag(raw: str, name: str) -> bool:
+    if raw not in ("0", "1"):
+        raise ValueError(f"{name} must be '0' or '1'; got {raw!r}")
+    return raw == "1"
+
+
+def _env_choice(raw: str, name: str, allowed) -> str:
+    if raw not in allowed:
+        raise ValueError(f"{name} must be one of {tuple(allowed)}; got {raw!r}")
+    return raw
+
+
+def _env_number(raw: str, name: str, cast, minimum=None):
+    try:
+        value = cast(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be {cast.__name__}; got {raw!r}") from None
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}; got {value}")
+    return value
+
+
+# Sol-Engine drives every one of these from the environment, so a config under
+# `config/minimax_h3/` transfers to ComfyUI unchanged. `SOL_ATTN_KV_SPLITS` has
+# no upstream counterpart — the reference never varies it — and follows the same
+# naming so it reads as part of the set.
+ENV_OVERRIDES = {
+    "SOL_ATTN_TAU": ("tau", lambda raw, n: _env_number(raw, n, float)),
+    "SOL_ATTN_THRESH_TYPE": ("thresh_type",
+                             lambda raw, n: _env_choice(raw, n, ("diag", "exact"))),
+    "SOL_ATTN_FIRST_DENSE_STEPS": ("first_dense_steps",
+                                   lambda raw, n: _env_number(raw, n, float, 0.0)),
+    "SOL_ATTN_FIRST_DENSE_LAYERS": ("first_dense_layers",
+                                    lambda raw, n: _env_number(raw, n, int, 0)),
+    "H3_SOL_SINK_MODE": ("sink_mode", lambda raw, n: _env_choice(raw, n, SINK_MODES)),
+    "SOL_ATTN_CORRECTNESS_GATE": ("correctness_gate", _env_flag),
+    "SOL_ATTN_STRICT": ("strict", _env_flag),
+    "SOL_ATTN_KV_SPLITS": ("kv_splits", lambda raw, n: _env_number(raw, n, int, 1)),
+}
+
+
+def apply_env_overrides(policy: "Policy", environ=None) -> list[str]:
+    """Let the Sol-Engine environment variables win over the node's widgets.
+
+    Mutates `policy` in place and returns one line per override, for the caller
+    to print. Two rules keep a second source of truth from becoming a silent one:
+    an unset variable changes nothing, and a malformed value raises instead of
+    falling back to the widget. A typo in `SOL_ATTN_THRESH_TYPE` that quietly
+    left the widget's value in place would be the same class of bug as a sparse
+    configuration silently running dense.
+    """
+    import os
+
+    environ = os.environ if environ is None else environ
+    applied = []
+    for name, (field, parse) in ENV_OVERRIDES.items():
+        raw = environ.get(name)
+        if raw is None:
+            continue
+        value = parse(raw.strip(), name)
+        was = getattr(policy, field)
+        setattr(policy, field, value)
+        if value != was:
+            applied.append(f"{name}={value} (widget had {was})")
+        else:
+            applied.append(f"{name}={value}")
+    return applied
 
 
 def dense_step_count(first_dense_steps: float, total_steps: int | None) -> int:

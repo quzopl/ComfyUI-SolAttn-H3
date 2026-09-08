@@ -33,7 +33,7 @@ def dense_bthd(q, k, v):
     return out.transpose(1, 2)
 
 
-def run_gate(sol_attn, q, k, v, thresh_type: str) -> dict:
+def run_gate(sol_attn, q, k, v, thresh_type: str, kv_splits: int = 1) -> dict:
     """Check the kernel's arithmetic against SDPA on real QKV.
 
     `tau=-1000` admits every block, so what is measured is the kernel's
@@ -43,8 +43,13 @@ def run_gate(sol_attn, q, k, v, thresh_type: str) -> dict:
     The gate runs at the production head count: `preprocess.prepare` autotunes
     its Triton kernels on a key of `T` alone, so a first call at a lower head
     count would cache a configuration chosen for a narrower grid.
+
+    `kv_splits` is passed through for the same reason. Above 1 the kernel
+    reduces across split accumulators, which changes the summation order and so
+    the rounding; gating at `kv_splits=1` would clear arithmetic that the
+    production path never runs.
     """
-    got = sol_attn(q, k, v, tau=-1000.0, thresh_type=thresh_type)
+    got = sol_attn(q, k, v, tau=-1000.0, thresh_type=thresh_type, kv_splits=kv_splits)
     want = dense_bthd(q, k, v)
     diff = (got.float() - want.float()).abs()
     ref_max = float(want.float().abs().max())
@@ -177,7 +182,8 @@ def make_override(state, policy):
                 _density_once(state, qb, kb, vb, policy, sink)
 
             out = sol_attn(qb, kb, vb, tau=policy.tau, thresh_type=policy.thresh_type,
-                           kv_splits=1, sink_start=sink.start, sink_tokens=sink.tokens)
+                           kv_splits=policy.kv_splits,
+                           sink_start=sink.start, sink_tokens=sink.tokens)
             # The sink makes the prefix exact as K/V, but its own query rows
             # still route sparsely. The kernel's README is explicit that an
             # MMDiT integration must recompute those rows densely.
@@ -223,7 +229,7 @@ def _gate_once(state, sol_attn, qb, kb, vb, policy) -> None:
     calls will later use. Better not to measure than to poison it.
     """
     try:
-        stats = run_gate(sol_attn, qb, kb, vb, policy.thresh_type)
+        stats = run_gate(sol_attn, qb, kb, vb, policy.thresh_type, policy.kv_splits)
     except torch.OutOfMemoryError:
         state.record_gate(qb.shape[1:], {"passed": None, "skipped": "out of memory"})
         print(f"{LOG} correctness gate skipped: out of memory", flush=True)

@@ -16,7 +16,7 @@ from comfy.patcher_extension import WrappersMP
 from .attention import make_override
 from .kernel import probe
 from .layout import SINK_MODES, sink_from_segments
-from .state import LOG, Policy, SolAttnState, resolve_step
+from .state import LOG, Policy, SolAttnState, apply_env_overrides, resolve_step
 
 KEY = "solattn_h3"
 STAMP = "solattn_block"
@@ -54,6 +54,12 @@ class SolAttnH3:
                 "strict": ("BOOLEAN", {"default": False,
                            "tooltip": "Turns every unintended decline of the sparse path into an "
                                       "exception. For validation, not for daily use."}),
+                "kv_splits": ("INT", {"default": 1, "min": 1, "max": 4,
+                              "tooltip": "How many pieces the kernel splits the K/V axis into. "
+                                         "SM90 (H100) ONLY — on any other GPU the kernel rejects "
+                                         "anything above 1, and this node refuses to mount rather "
+                                         "than fail mid-sampling. 1 is the reference line and "
+                                         "every Sol-Engine config leaves it there."}),
             }
         }
 
@@ -65,16 +71,35 @@ class SolAttnH3:
                    "the kernel contract is not met.")
 
     def patch(self, model, enabled, tau, thresh_type, first_dense_steps,
-              first_dense_layers, sink_mode, correctness_gate, strict):
+              first_dense_layers, sink_mode, correctness_gate, strict, kv_splits=1):
         blocks = _block_count(model)
 
         policy = Policy(enabled=enabled, tau=tau, thresh_type=thresh_type,
                         first_dense_steps=first_dense_steps,
                         first_dense_layers=first_dense_layers, sink_mode=sink_mode,
-                        correctness_gate=correctness_gate, strict=strict)
+                        correctness_gate=correctness_gate, strict=strict,
+                        kv_splits=kv_splits)
+        # Sol-Engine's environment variables win over the widgets, so a config
+        # under `config/minimax_h3/` transfers unchanged. Printed rather than
+        # applied quietly: a run whose settings came from the shell, with the
+        # node showing something else, is the kind of thing that gets measured
+        # once and explained wrongly for a week.
+        for line in apply_env_overrides(policy):
+            print(f"{LOG} environment override {line}", flush=True)
         state = SolAttnState(policy)
 
         found = probe()
+        # The kernel accepts kv_splits > 1 on SM90 alone and raises everywhere
+        # else — but it raises from inside the sampler, on the first sparse
+        # call, after the text encoder and the transformer have already been
+        # loaded. Checking here turns minutes of wasted loading into an
+        # immediate, readable failure.
+        if policy.kv_splits > 1 and found.available and found.arch != (9, 0):
+            raise ValueError(
+                f"{LOG} kv_splits={policy.kv_splits} works on SM90 (H100) only; this GPU is "
+                f"SM{found.arch[0]}{found.arch[1]}. The kernel would raise mid-sampling. "
+                "Set kv_splits back to 1."
+            )
         state.backend = found.backend
         if not found.available:
             state.kernel_error = found.error
