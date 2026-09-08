@@ -1,11 +1,12 @@
 import pytest
 
-from solattn_h3.kernel import backend_for_arch
+from solattn_h3.kernel import CUTE_BACKENDS, backend_for_arch
 
 
 @pytest.mark.parametrize("arch,cute,expected", [
     ((9, 0), True, "cute_sm90"),
     ((10, 0), True, "cute_sm100"),
+    ((10, 3), True, "triton"),      # B300: no row yet in the installable kernel
     ((12, 0), True, "cute_sm120"),
     ((8, 9), True, "cute_sm89"),    # Ada gained a CuTe kernel upstream in Aug 2026
     ((9, 0), False, "triton"),      # no CuTe -> Triton, specialized architecture or not
@@ -33,6 +34,26 @@ def test_table_matches_released_kernel():
     interface = pytest.importorskip("sol_attn.interface")
     for arch, expected in interface._CUTE_BACKENDS.items():
         assert backend_for_arch(arch, True) == expected
+
+
+def test_table_claims_no_architecture_the_kernel_lacks():
+    """The other direction: an entry we have and the kernel does not.
+
+    The check above iterates over *upstream's* table, so it only sees rows we
+    are missing. A row we invented — or one that survived a version of the
+    package where it existed — passes it untouched, and the node then advertises
+    a CuTe backend while the kernel quietly dispatches Triton. That is the same
+    failure the SM103 comment in `kernel.py` describes, arrived at from the
+    opposite side.
+    """
+    interface = pytest.importorskip("sol_attn.interface")
+    extra = set(CUTE_BACKENDS) - set(interface._CUTE_BACKENDS)
+    assert not extra, (
+        f"the local table claims {sorted(extra)}, which the installed sol-attn "
+        f"({getattr(interface, '__version__', 'unknown version')}) does not have. "
+        "Either the package is older than the table and should be upgraded, or "
+        "the row is wrong and backend reporting is lying about those cards."
+    )
 
 
 def test_probe_agrees_with_the_public_resolver():

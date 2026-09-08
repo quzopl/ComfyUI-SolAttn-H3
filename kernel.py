@@ -16,6 +16,18 @@ CUTE_BACKENDS = {
     (9, 0): "cute_sm90",     # H100
     (10, 0): "cute_sm100",   # B200 / GB200
     (12, 0): "cute_sm120",   # RTX 5090, RTX PRO 6000 Blackwell
+    # No (10, 3) row on purpose. B300 / Blackwell Ultra reports SM103, and the
+    # copy of the kernel vendored inside Sol-Engine's own H3 runtime
+    # (`models/minimax_h3/Sol-H3/h3_runtime/third_party/sol_attn/interface.py`)
+    # does route it to the SM100 path — its comment explains that the bf16
+    # attention kernel takes the common Blackwell tcgen05 lowering. But that is
+    # a different file from the package this node installs
+    # (`techniques/sparse_backends`), whose table stopped at SM120 as of
+    # kernel 2936c47. Adding the row here would make the node report cute_sm100
+    # on a B300 while the installed kernel dispatched Triton: the exact
+    # mismatch this table exists to catch, only pointing the other way. Add it
+    # when the installable package does, and `test_table_matches_released_kernel`
+    # will say when that is.
 }
 TRITON = "triton"
 
