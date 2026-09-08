@@ -216,7 +216,8 @@
     2,
     "prefix",
     true,
-    false
+    false,
+    1
    ],
    "title": "Sol-Attn (MiniMax-H3)"
   },

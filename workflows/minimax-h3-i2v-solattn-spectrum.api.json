@@ -80,7 +80,8 @@
    "first_dense_layers": 2,
    "sink_mode": "prefix",
    "correctness_gate": true,
-   "strict": false
+   "strict": false,
+   "kv_splits": 1
   }
  },
  "spectrum": {

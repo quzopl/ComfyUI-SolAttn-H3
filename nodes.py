@@ -54,13 +54,19 @@ class SolAttnH3:
                 "strict": ("BOOLEAN", {"default": False,
                            "tooltip": "Turns every unintended decline of the sparse path into an "
                                       "exception. For validation, not for daily use."}),
+            },
+            # Optional, not required: a graph saved before this input existed —
+            # including the workflows shipped in this repo — must keep loading.
+            # ComfyUI only rejects a missing *required* input, and `patch()`
+            # defaults it to 1, which is the reference line anyway.
+            "optional": {
                 "kv_splits": ("INT", {"default": 1, "min": 1, "max": 4,
                               "tooltip": "How many pieces the kernel splits the K/V axis into. "
                                          "SM90 (H100) ONLY — on any other GPU the kernel rejects "
                                          "anything above 1, and this node refuses to mount rather "
                                          "than fail mid-sampling. 1 is the reference line and "
                                          "every Sol-Engine config leaves it there."}),
-            }
+            },
         }
 
     RETURN_TYPES = ("MODEL",)
