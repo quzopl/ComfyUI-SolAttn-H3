@@ -1,14 +1,23 @@
-"""Builds the README charts from selftest.py runs on two GPUs.
+"""Builds the README charts from selftest.py runs on three GPUs.
 
-Both panels are the same measurement at the same sequence lengths, so they are
+Every panel is the same measurement at the same sequence lengths, so they are
 directly comparable: kernel-only time per attention call, 56 heads, head_dim 128,
 tau=1.0, thresh_type=diag, on the CuTe DSL backend each card resolves to.
 
-  * panel A — RTX 4070 Ti, cute_sm89
-  * panel B — RTX PRO 6000 Blackwell, cute_sm120
+  * panel A — RTX 4070 Ti, cute_sm89              (consumer Ada)
+  * panel B — L40, cute_sm89                      (datacentre Ada)
+  * panel C — RTX PRO 6000 Blackwell, cute_sm120
+
+Two Ada cards sit next to each other on purpose: same backend, same kernel,
+different memory system, so the pair shows what the card contributes and what
+the architecture does.
+
+The L40 was not measured at 30 976 rows — 48 GB could not hold the tensors — and
+that gap is drawn as a gap, with a label. Dropping the category instead would
+misalign the axes and quietly imply the run was comparable when it was shorter.
 
 Colour is bound to the entity rather than to a position within the group:
-Sol-Attn is always blue, SDPA orange, SageAttention aqua — in both panels.
+Sol-Attn is always blue, SDPA orange, SageAttention aqua — in every panel.
 """
 from __future__ import annotations
 
@@ -43,7 +52,13 @@ SM89 = {
     "SDPA": [26.06, 106.49, 373.51],
     "SageAttention": [11.40, 39.81, 131.57],
 }
-# Panel B: RTX PRO 6000 Blackwell, backend cute_sm120
+# Panel B: L40, backend cute_sm89. None = not measured, drawn as a gap.
+L40 = {
+    "Sol-Attn": [3.93, 13.40, None],
+    "SDPA": [13.02, 50.00, None],
+    "SageAttention": [5.77, 24.63, None],
+}
+# Panel C: RTX PRO 6000 Blackwell, backend cute_sm120
 SM120 = {
     "Sol-Attn": [1.97, 5.53, 16.58],
     "SDPA": [5.88, 21.99, 77.45],
@@ -72,17 +87,27 @@ def _grouped(ax, theme, categories, series, *, label_series, fmt, speedup_vs=Non
     for index, (name, values) in enumerate(series.items()):
         offset = -span / 2 + width * (index + 0.5)
         positions = [x + offset for x in range(len(categories))]
-        ax.bar(positions, values, width=width * 0.94, label=name,
-               color=theme["series"][name], linewidth=0)
+        # A missing measurement is drawn as nothing, not as zero: a zero-height
+        # bar reads as "instant", which is the opposite of "not run".
+        drawn = [(x, v) for x, v in zip(positions, values) if v is not None]
+        ax.bar([x for x, _ in drawn], [v for _, v in drawn], width=width * 0.94,
+               label=name, color=theme["series"][name], linewidth=0)
         if name != label_series:
             continue
-        for x, value in zip(positions, values):
+        for x, value in drawn:
             ax.annotate(fmt(value), (x, value), textcoords="offset points",
                         xytext=(0, 4), ha="center", fontsize=8.5,
                         color=theme["primary"], fontweight="medium")
+        for slot, (x, value) in enumerate(zip(positions, values)):
+            if value is None:
+                ax.annotate("not\nmeasured", (slot, 0), textcoords="offset points",
+                            xytext=(0, 14), ha="center", va="bottom", fontsize=8,
+                            color=theme["secondary"], style="italic")
         if speedup_vs is None:
             continue
         for x, value, other in zip(positions, values, series[speedup_vs]):
+            if value is None or other is None:
+                continue
             ax.annotate(f"{other / value:.2f}x", (x, value), textcoords="offset points",
                         xytext=(0, 17), ha="center", fontsize=9, fontweight="semibold",
                         color=theme["primary"])
@@ -92,12 +117,14 @@ def _grouped(ax, theme, categories, series, *, label_series, fmt, speedup_vs=Non
 
 def build(mode: str) -> pathlib.Path:
     theme = THEMES[mode]
-    fig, (left, right) = plt.subplots(1, 2, figsize=(11.2, 4.3), dpi=200,
-                                      gridspec_kw={"width_ratios": [1, 1]})
+    fig, axes = plt.subplots(1, 3, figsize=(16.0, 4.3), dpi=200,
+                             gridspec_kw={"width_ratios": [1, 1, 1]})
+    left, middle, right = axes
     fig.patch.set_facecolor(theme["surface"])
 
     for ax, data, title, top, tick in (
         (left, SM89, "RTX 4070 Ti — backend cute_sm89", 430, 100),
+        (middle, L40, "L40 — backend cute_sm89", 60, 20),
         (right, SM120, "RTX PRO 6000 Blackwell — backend cute_sm120", 90, 20),
     ):
         _grouped(ax, theme, LENGTHS, data, label_series="Sol-Attn",

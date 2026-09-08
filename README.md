@@ -16,13 +16,18 @@ silently.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.png">
-  <img alt="Kernel time per attention call on RTX 4070 Ti (cute_sm89) and RTX PRO 6000 Blackwell (cute_sm120), Sol-Attn against SDPA and SageAttention at three sequence lengths" src="docs/images/benchmark-light.png">
+  <img alt="Kernel time per attention call on RTX 4070 Ti (cute_sm89), L40 (cute_sm89) and RTX PRO 6000 Blackwell (cute_sm120), Sol-Attn against SDPA and SageAttention at three sequence lengths" src="docs/images/benchmark-light.png">
 </picture>
 
-The chart is `selftest.py` on two cards at identical settings: kernel time per
-attention call, `tau=1.0`, on the CuTe backend each one resolves to. Every table
-below states its card **and its backend**, because both change the answer. Do not
-transfer any of these numbers to your own GPU — run `selftest.py` on it instead.
+The chart is `selftest.py` on three cards at identical settings: kernel time per
+attention call, `tau=1.0`, on the CuTe backend each one resolves to. Two of them
+are Ada on the same `cute_sm89` kernel, so the pair separates what the card
+contributes from what the architecture does. The L40 has no bar at 30 976 rows
+because 48 GB could not hold the tensors — the gap is drawn rather than dropped.
+
+Every table below states its card **and its backend**, because both change the
+answer. Do not transfer any of these numbers to your own GPU — run `selftest.py`
+on it instead.
 
 > **Upstream update, August 2026.** NVIDIA added a **CuTe DSL kernel for SM89**
 > ([`9cfdd07`](https://github.com/NVlabs/Sana/commit/9cfdd07)), so Ada is no
@@ -105,6 +110,37 @@ leaving the ratios intact — so measure on a quiet card if you want the absolut
 numbers to mean anything.
 
 These are kernel-only figures; no end-to-end ComfyUI run was measured on this card.
+
+### End-to-end on SM120, across weight profiles
+
+A second RTX PRO 6000 Blackwell, 96 GB. MiniMax-H3 at 1344×768, 107 frames,
+20 steps, `res_multistep`, same seed. Each row is a full generation; the service
+was restarted between rows so peak VRAM is comparable.
+
+| Weights | SDPA | SageAttention | Sol-Attn | Peak VRAM |
+|---|---:|---:|---:|---:|
+| `pruned_bf16` + int8 text encoder | 170.1 s | 135.0 s | **125.1 s** | 72–76 GB |
+| `pruned_int8_convrot` + NVFP4 text encoder | 140.9 s | 105.0 s | **95.0 s** | 43–47 GB |
+
+Two more combinations, measured against SageAttention only, for the memory
+picture: `pruned_int8_convrot` + int8 text encoder 105.0 s at 53.9 GB, and
+`pruned_bf16` + NVFP4 text encoder 135.0 s at 61.4 GB.
+
+Read across those four and the split is clean: **the transformer sets the time,
+the text encoder sets the memory.** Both bf16 rows take 135 s and both int8 rows
+105 s regardless of which encoder is paired with them, while swapping the encoder
+from int8 to NVFP4 returns about 10 GB either way. That is what you would expect
+from a text encoder that runs once against a transformer that runs twenty times,
+and it means the encoder choice is free speed-wise — pick it on VRAM alone.
+
+Sol-Attn is worth 1.08× over SageAttention on the bf16 weights and 1.11× on int8,
+against 2.26× in the kernel table at the same sequence length. Attention is a
+smaller share of wall clock on a 96 GB card than the kernel numbers suggest, and
+the sparse path costs about 4 GB more VRAM than SageAttention.
+
+The kernel-only numbers from this card reproduce the SM120 table above closely
+(1.98/5.45 ms against 1.97/5.53 at 8 192 and 16 384) — a different machine, the
+same measurement.
 
 ### End-to-end, MiniMax-H3 in ComfyUI — SDPA baseline, Triton backend
 
