@@ -16,14 +16,24 @@ silently.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.png">
-  <img alt="Kernel time per attention call on RTX 4070 Ti (cute_sm89), L40 (cute_sm89) and RTX PRO 6000 Blackwell (cute_sm120), Sol-Attn against SDPA and SageAttention at three sequence lengths" src="docs/images/benchmark-light.png">
+  <img alt="Kernel time per attention call on RTX 4070 Ti and L40 (cute_sm89), RTX 5080 and RTX PRO 6000 Blackwell (cute_sm120), Sol-Attn against SDPA and SageAttention at three sequence lengths" src="docs/images/benchmark-light.png">
 </picture>
 
-The chart is `selftest.py` on three cards at identical settings: kernel time per
-attention call, `tau=1.0`, on the CuTe backend each one resolves to. Two of them
-are Ada on the same `cute_sm89` kernel, so the pair separates what the card
-contributes from what the architecture does. The L40 has no bar at 30 976 rows
-because 48 GB could not hold the tensors — the gap is drawn rather than dropped.
+The chart is `selftest.py` on four cards at identical settings: kernel time per
+attention call, `tau=1.0`, on the CuTe backend each one resolves to. The grid is
+architecture × segment — Ada on top, Blackwell below; consumer on the left,
+datacentre on the right — so either axis can be read on its own. The L40 has no
+bar at 30 976 rows because 48 GB could not hold the tensors; the gap is drawn
+rather than dropped.
+
+Read the speedup labels across the grid and the obvious explanation fails.
+Against SageAttention the two consumer cards land in the same place — **1.31×,
+1.45×, 1.65×** on the 4070 Ti and **1.27×, 1.50×, 1.66×** on the 5080 — while the
+datacentre Blackwell reaches **1.84×, 2.26×, 2.55×**. Moving from Ada to
+Blackwell on a consumer board bought a large drop in absolute time and almost
+nothing in *ratio*. What separates the panels is the memory system, not the
+architecture, so "it's a Blackwell card" does not predict what Sol-Attn will give
+you.
 
 Every table below states its card **and its backend**, because both change the
 answer. Do not transfer any of these numbers to your own GPU — run `selftest.py`
@@ -45,13 +55,19 @@ on it instead.
 > sequence length: **1.21×** at 31 650 rows, **1.32×** at 45 241.
 >
 > End-to-end on the real model with the CuTe backend (seq 17 504, 20 steps,
-> SageAttention baseline) came out at 161.3 s → 151.0 s. **Do not read that as a
-> 1.07× win**: the attention accounting does not support it. The `off` run spent
+> SageAttention baseline) came out at 161.3 s → 151.0 s. **Do not read that 1.07×
+> as the kernel being faster**: the attention accounting does not support it. The `off` run spent
 > 1000 × 43.40 ms = 43.4 s in attention, the `on` run 768 × 42.54 + 232 × 43.28 +
 > 3.4 s of compilation = 46.1 s — *more*, not less. At this shape, with a 494-row
 > sink, the CuTe kernel buys parity with SageAttention (42.54 vs 43.28 ms per
-> call), and the 10 s difference in wall clock is run-to-run noise on a
-> memory-pressured card. The real wins are at the longer sequences above.
+> call), so the win is not arithmetic.
+>
+> **That last sentence used to read "the 10 s difference in wall clock is
+> run-to-run noise on a memory-pressured card." That was wrong**, and
+> [the 16 GB section](#end-to-end-when-the-model-fits-in-vram-and-when-it-streams)
+> shows why: the gap reproduces across eight runs on two cards, and it vanishes
+> the moment the weights fit in VRAM. It is not noise — it is streaming relief,
+> and it is worth more than the kernel is.
 
 > ### ⚠️ Read this before you expect a speedup
 >
@@ -60,9 +76,10 @@ on it instead.
 > **SageAttention** on the same card, at the default `tau=1.0`, this node is a
 > **net loss** — this is the **Triton** backend, i.e. what you get on any
 > architecture when the CuTe runtime is not installed. On the CuTe DSL path the
-> result reverses on both cards measured: 1.06× on
-> [SM89](#results) and 1.85–2.55× on
-> [SM120](#sm120--rtx-pro-6000-blackwell-cute-dsl):
+> result reverses on every card measured: 1.06× on
+> [SM89](#results), 1.27–1.66× on a
+> [consumer SM120 board](#sm120--rtx-5080-16-gb-cute-dsl) and 1.85–2.55× on a
+> [datacentre one](#sm120--rtx-pro-6000-blackwell-cute-dsl):
 >
 > | Baseline (seq 17 504, 20 steps, SM89) | ms per attention call | End-to-end |
 > |---|---:|---:|
@@ -78,7 +95,7 @@ on it instead.
 >
 > **Gains at `tau=1.0` are not guaranteed. Check `attn_ms_per_call` in your own
 > log before assuming any.** The levers that do produce a win — a higher `tau`,
-> or `sink_mode=text` — trade quality; see [Tuning](#tuning-when-the-default-loses).
+> or `sink_mode=text` — trade quality; see [Tuning](#tuning).
 
 ### SM120 — RTX PRO 6000 Blackwell (CuTe DSL)
 
@@ -111,6 +128,34 @@ numbers to mean anything.
 
 These are kernel-only figures; no end-to-end ComfyUI run was measured on this card.
 
+### SM120 — RTX 5080, 16 GB (CuTe DSL)
+
+The same backend on a consumer Blackwell board. torch 2.12.0+cu130, CUDA 13.0,
+driver 610.57.04, SageAttention 2.2.0 built from source for `sm_120`.
+
+| Sequence | Gate | Density | Sol-Attn | SDPA | SageAttention | vs SDPA | vs Sage |
+|---:|:--:|---:|---:|---:|---:|---:|---:|
+| 8 192 | PASS | 0.271 | 5.47 ms | 18.84 ms | 6.94 ms | 3.45× | 1.27× |
+| 16 384 | PASS | 0.214 | 17.14 ms | 75.39 ms | 25.66 ms | 4.40× | 1.50× |
+| 30 976 | PASS | 0.186 | 52.85 ms | 267.33 ms | 87.62 ms | 5.06× | 1.66× |
+
+**Densities are identical to the RTX PRO 6000 to three decimals** — 0.271, 0.214,
+0.186 on both. Routing is a property of the data, not of the hardware, which is
+the control that says these two panels are measuring the same thing.
+
+The absolute times are not close: this card needs 2.8–3.2× longer per call than
+the datacentre part. More useful is what happens to the *ratio*. Against
+SageAttention the 5080 gives 1.27–1.66×, and the 4070 Ti — a different
+architecture, a different kernel — gives 1.31–1.65×. Practically the same.
+Against the RTX PRO 6000's 1.85–2.55× that is a large gap, and it does not follow
+the architecture line; it follows the memory system. Sol-Attn reads about a fifth
+of the K/V blocks, so what it converts into speed is spare bandwidth, and a
+consumer board has less of it to give relative to its compute.
+
+All three lengths fit in 16 GB — peak 6 811 MiB at 30 976 rows. That is the
+kernel's working set on an otherwise empty card, with the model not loaded; a
+real generation adds the weights on top.
+
 ### End-to-end on SM120, across weight profiles
 
 A second RTX PRO 6000 Blackwell, 96 GB. MiniMax-H3 at 1344×768, 107 frames,
@@ -141,6 +186,98 @@ the sparse path costs about 4 GB more VRAM than SageAttention.
 The kernel-only numbers from this card reproduce the SM120 table above closely
 (1.98/5.45 ms against 1.97/5.53 at 8 192 and 16 384) — a different machine, the
 same measurement.
+
+### End-to-end: when the model fits in VRAM, and when it streams
+
+This is the one section with a controlled variable. The same box, the same
+ComfyUI, the same SageAttention commit (`v2.2.0-38-gd1a57a5`), the same graph and
+seed — first on an RTX 4070 Ti (12 GB), then on an RTX 5080 (16 GB) after nothing
+but a card swap. 864×480, 125 frames (**17 504**-row sequence), 8 steps,
+`res_multistep`, seed 42, `fl2va` weights, measurement pass after a warm-up pass.
+
+| Card | Weights | DiT staged | Node off | Node on | Ratio |
+|---|---|---:|---:|---:|---:|
+| 4070 Ti (`cute_sm89`) | `int8_convrot` | 19 995 MB | 83.2 s | 75.1 s | 1.11× |
+| 4070 Ti (`cute_sm89`) | NVFP4 *(emulated)* | 11 944 MB | 117.4 s | 116.5 s | 1.00× |
+| 5080 (`cute_sm120`) | `int8_convrot` | 19 995 MB | 58.2 s | **45.1 s** | **1.29×** |
+| 5080 (`cute_sm120`) | NVFP4 *(native)* | 11 944 MB | **40.2 s** | **40.0 s** | 1.00× |
+
+#### The node's value is set by VRAM pressure, not by the kernel
+
+Attention time on the 5080 does not depend on the weight format at all. Four
+runs, four readings: dense 29.69 / 29.71 / 29.74 / 29.94 ms per call, sparse
+27.58 / 27.60 / 27.61 ms. Q/K/V reach the kernel as bf16 whatever the weights are
+stored as. So Sol-Attn saves the same ~0.4 s of attention in every row below —
+and the wall clock does something else entirely:
+
+| 5080, 15.5 GB usable | DiT | Fits? | Attention saved | Wall clock saved |
+|---|---:|---|---:|---:|
+| `int8_convrot` | 19 995 MB | no → streams over PCIe | 0.4 s | **13.1 s** |
+| NVFP4 | 11 944 MB | yes | 0.4 s | 0.2 s |
+
+When the weights fit, the end-to-end gain **equals** the attention saving, to
+within the noise. When they stream, it is 33× larger than the attention saving.
+The sparse path touches about a quarter of the K/V blocks, and on a card that is
+pulling 20 GB of weights across PCIe every step, that spare bandwidth is worth
+far more than the arithmetic it skips.
+
+This also explains the 96 GB table above, where nothing streams and Sol-Attn is
+worth 1.08–1.11× — its honest attention share, and no more. **The node pays best
+on the cards that can least afford the model, which is the opposite of what a
+kernel benchmark suggests.**
+
+#### NVFP4 reverses direction between the two cards
+
+On the 4070 Ti, NVFP4 was **1.41× slower** than int8 (117.4 s vs 83.2 s). On the
+5080 it is **1.45× faster** (40.2 s vs 58.2 s). Same files, same loader; the
+difference is one line of ComfyUI's startup log, because
+`supports_nvfp4_compute()` rejects `props.major < 10`:
+
+```
+4070 Ti (SM89) :  emulated ops: mxfp8, nvfp4
+5080   (SM120) :  Native ops: …, nvfp4          ← no "emulated" line at all
+```
+
+Emulation keeps the 4-bit weights in VRAM but dequantizes to bf16 before every
+matmul, and on Ada that costs more than the 8 GB of streaming it saves. Step rate
+went 12.0 s/it → 3.10 s/it across the swap. **Do not judge NVFP4 on a
+pre-Blackwell card — you are not measuring the format, you are measuring its
+fallback.**
+
+Best configuration on each card, which is what a buyer actually feels: 75.1 s →
+**40.0 s**, i.e. **1.88×**.
+
+#### Correctness and output
+
+The gate passed 8/8 on the 5080 with values indistinguishable from Ada:
+`max_rel` 0.00385–0.00388 against a 0.02 limit, `rel_l2` 0.00105 against 0.005.
+Routing density 0.2573–0.2582 against 0.2575–0.2584 on the 4070 Ti — data, not
+hardware, as it should be.
+
+| PSNR | dB |
+|---|---:|
+| Node off vs on — int8, 5080 | 25.13 |
+| Node off vs on — NVFP4, 5080 | 23.92 |
+| int8 vs NVFP4, both node-off, 5080 | **19.06** |
+| Same config, 4070 Ti vs 5080 — int8 | 30.84 |
+| Same config, 4070 Ti vs 5080 — NVFP4 | 24.65 |
+
+Two things worth reading off that. **Choosing the weight format moves the image
+more than enabling this node does** — 19 dB between int8 and NVFP4, against 25 dB
+for switching Sol-Attn on. And the same NVFP4 file scores 24.65 dB across the two
+cards while int8 scores 30.84 dB: emulated and native 4-bit arithmetic genuinely
+differ, so an NVFP4 preview rendered on an Ada card is not what the format
+produces.
+
+As [Quality](#quality--and-why-off-vs-on-psnr-misleads) explains at length, PSNR
+between different kernels or quantizations measures *divergence*, not quality —
+matched seeds do not survive a changed trajectory. None of these numbers say
+which frame looks better.
+
+**Scope.** Seq 17 504 is the short end. Attention is a minority of step time
+here, the kernel tables above show the margin widening with length, and a 15 s
+clip runs several times longer a sequence. Nothing in this section transfers to
+that without measuring it.
 
 ### End-to-end, MiniMax-H3 in ComfyUI — SDPA baseline, Triton backend
 
@@ -385,13 +522,49 @@ Backend is selected automatically from the GPU architecture:
 | SM89 | RTX 4090, RTX 4070 Ti | CuTe DSL |
 | SM90 | H100 | CuTe DSL |
 | SM100 | B200 / GB200 | CuTe DSL |
-| SM120 | RTX 5090, RTX PRO 6000 Blackwell | CuTe DSL |
+| SM120 | RTX 5080, RTX 5090, RTX PRO 6000 Blackwell | CuTe DSL |
 | SM80 / SM86 | A100, RTX 3090 | Triton |
 
 Missing any of `cutlass.cute`, `cuda-python` or `tvm_ffi` falls back to Triton
 regardless of architecture — and that fallback is the difference between a win
 and a loss on SM89. The node prints the selected backend when it mounts;
 `backend=triton` on an SM89+ card means one of those three packages is absent.
+
+### After a GPU upgrade, rebuild SageAttention
+
+Sol-Attn resolves its own backend from the live device, so it needs nothing after
+a card swap. **SageAttention does not.** A source build compiles for the card that
+was installed at the time, and a binary holding only `sm_89` gives no PTX to JIT
+from, so ComfyUI started with `--use-sage-attention` fails on a Blackwell card
+with:
+
+```
+Error running sage attention: CUDA error: no kernel image is available for execution on the device
+```
+
+Check the binary rather than the import — `import sageattention` succeeds either
+way, and so does a plain `sageattn()` call, because it can dispatch to a variant
+that happens to exist:
+
+```bash
+cuobjdump --list-elf .../site-packages/sageattention/_qattn_sm89*.so | grep -o 'sm_[0-9]*'
+```
+
+Rebuilding for `sm_120` on CUDA 13.3 needs two flags that are not obvious:
+
+```bash
+export TORCH_CUDA_ARCH_LIST="12.0"
+export CC=/usr/bin/clang++ CXX=/usr/bin/clang++   # NOT gcc — see below
+export CPATH=/usr/lib/gcc/x86_64-pc-linux-gnu/14.3.1/include   # clang has no omp.h
+pip install --no-build-isolation .
+```
+
+`CC` rather than `NVCC_PREPEND_FLAGS`, because `torch/utils/cpp_extension.py`
+reads `-ccbin` from `CC` and appends its own — pass it any other way and you get
+two `-ccbin` flags, of which nvcc uses the last. And clang rather than gcc
+because nvcc 13.3 drops the `typename` that `ATen/core/List_inl.h:202` already
+has when it generates host code, which every gcc then rejects. The device pass is
+fine on either; only the host pass fails.
 
 ## Installation
 

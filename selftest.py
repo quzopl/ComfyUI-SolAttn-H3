@@ -142,7 +142,7 @@ def main() -> None:
     rows = [run_case(t, args.heads, args.sink_tokens, args.thresh_type, args.tau)
             for t in args.tokens]
 
-    print(f"\n{'=' * 74}\nPODSUMOWANIE ({found.backend})\n{'=' * 74}")
+    print(f"\n{'=' * 74}\nSUMMARY ({found.backend})\n{'=' * 74}")
     print(f"{'T':>7} {'gate':>5} {'density':>9} {'sol ms':>9} {'sdpa ms':>9} "
           f"{'sage ms':>9} {'vs sdpa':>9} {'vs sage':>9}")
     for row in rows:

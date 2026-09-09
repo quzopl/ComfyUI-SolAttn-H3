@@ -1,16 +1,20 @@
-"""Builds the README charts from selftest.py runs on three GPUs.
+"""Builds the README charts from selftest.py runs on four GPUs.
 
 Every panel is the same measurement at the same sequence lengths, so they are
 directly comparable: kernel-only time per attention call, 56 heads, head_dim 128,
 tau=1.0, thresh_type=diag, on the CuTe DSL backend each card resolves to.
 
-  * panel A — RTX 4070 Ti, cute_sm89              (consumer Ada)
-  * panel B — L40, cute_sm89                      (datacentre Ada)
-  * panel C — RTX PRO 6000 Blackwell, cute_sm120
+The grid is architecture x segment, so either axis can be read on its own:
 
-Two Ada cards sit next to each other on purpose: same backend, same kernel,
-different memory system, so the pair shows what the card contributes and what
-the architecture does.
+              consumer                 datacentre
+  Ada         RTX 4070 Ti  cute_sm89   L40                    cute_sm89
+  Blackwell   RTX 5080     cute_sm120  RTX PRO 6000 Blackwell cute_sm120
+
+Reading down a column isolates the architecture at a fixed segment; reading
+across a row isolates the memory system at a fixed kernel. That matters because
+the two move independently: the Blackwell row is faster in absolute terms
+everywhere, but the *ratio* to SageAttention is larger on the datacentre part
+than on the consumer one, so neither axis alone predicts what a card will give.
 
 The L40 was not measured at 30 976 rows — 48 GB could not hold the tensors — and
 that gap is drawn as a gap, with a label. Dropping the category instead would
@@ -58,7 +62,13 @@ L40 = {
     "SDPA": [13.02, 50.00, None],
     "SageAttention": [5.77, 24.63, None],
 }
-# Panel C: RTX PRO 6000 Blackwell, backend cute_sm120
+# Panel C: RTX 5080, 16 GB, backend cute_sm120
+SM120_CONSUMER = {
+    "Sol-Attn": [5.47, 17.14, 52.85],
+    "SDPA": [18.84, 75.39, 267.33],
+    "SageAttention": [6.94, 25.66, 87.62],
+}
+# Panel D: RTX PRO 6000 Blackwell, backend cute_sm120
 SM120 = {
     "Sol-Attn": [1.97, 5.53, 16.58],
     "SDPA": [5.88, 21.99, 77.45],
@@ -117,15 +127,15 @@ def _grouped(ax, theme, categories, series, *, label_series, fmt, speedup_vs=Non
 
 def build(mode: str) -> pathlib.Path:
     theme = THEMES[mode]
-    fig, axes = plt.subplots(1, 3, figsize=(16.0, 4.3), dpi=200,
-                             gridspec_kw={"width_ratios": [1, 1, 1]})
-    left, middle, right = axes
+    fig, axes = plt.subplots(2, 2, figsize=(13.0, 8.4), dpi=200)
     fig.patch.set_facecolor(theme["surface"])
+    (top_left, top_right), (bottom_left, bottom_right) = axes
 
     for ax, data, title, top, tick in (
-        (left, SM89, "RTX 4070 Ti — backend cute_sm89", 430, 100),
-        (middle, L40, "L40 — backend cute_sm89", 60, 20),
-        (right, SM120, "RTX PRO 6000 Blackwell — backend cute_sm120", 90, 20),
+        (top_left, SM89, "RTX 4070 Ti — backend cute_sm89", 430, 100),
+        (top_right, L40, "L40 — backend cute_sm89", 60, 20),
+        (bottom_left, SM120_CONSUMER, "RTX 5080 — backend cute_sm120", 300, 100),
+        (bottom_right, SM120, "RTX PRO 6000 Blackwell — backend cute_sm120", 90, 20),
     ):
         _grouped(ax, theme, LENGTHS, data, label_series="Sol-Attn",
                  fmt=lambda v: f"{v:.1f}", speedup_vs="SageAttention")
@@ -137,18 +147,19 @@ def build(mode: str) -> pathlib.Path:
         ax.yaxis.set_major_locator(MultipleLocator(tick))
         ax.set_ylim(0, top)
 
-    handles, labels = left.get_legend_handles_labels()
+    handles, labels = top_left.get_legend_handles_labels()
     legend = fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
                         fontsize=9.5, bbox_to_anchor=(0.5, -0.005),
                         handlelength=1.1, handleheight=1.1, columnspacing=2.2)
     for text in legend.get_texts():
         text.set_color(theme["secondary"])
 
-    fig.text(0.008, 0.965,
+    fig.text(0.008, 0.975,
              "selftest.py, kernel only — 56 heads, head_dim 128, tau=1.0, diag. "
-             "Labels on the Sol-Attn bars are the speedup against SageAttention.",
+             "Labels on the Sol-Attn bars are the speedup against SageAttention. "
+             "Top row Ada, bottom row Blackwell; left column consumer, right column datacentre.",
              color=theme["secondary"], fontsize=9)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.93))
+    fig.tight_layout(rect=(0, 0.04, 1, 0.955))
 
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"benchmark-{mode}.png"
