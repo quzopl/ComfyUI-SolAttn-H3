@@ -82,15 +82,15 @@
         "vae_audio",
         0
       ],
-      "ref_image_0": [
+      "ref_images.ref_image_0": [
         "ref_1",
         0
       ],
-      "ref_image_1": [
+      "ref_images.ref_image_1": [
         "ref_2",
         0
       ],
-      "ref_image_2": [
+      "ref_images.ref_image_2": [
         "ref_3",
         0
       ]

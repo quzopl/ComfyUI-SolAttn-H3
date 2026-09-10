@@ -337,19 +337,53 @@
           "link": 4
         },
         {
-          "name": "ref_image_0",
+          "label": "ref_image_0",
+          "name": "ref_images.ref_image_0",
+          "shape": 7,
           "type": "IMAGE",
           "link": 5
         },
         {
-          "name": "ref_image_1",
+          "label": "ref_image_1",
+          "name": "ref_images.ref_image_1",
+          "shape": 7,
           "type": "IMAGE",
           "link": 6
         },
         {
-          "name": "ref_image_2",
+          "label": "ref_image_2",
+          "name": "ref_images.ref_image_2",
+          "shape": 7,
           "type": "IMAGE",
           "link": 7
+        },
+        {
+          "label": "ref_image_3",
+          "name": "ref_images.ref_image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "label": "ref_video_0",
+          "name": "ref_videos.ref_video_0",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "label": "ref_video_audio_0",
+          "name": "ref_video_audios.ref_video_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "label": "ref_audio_0",
+          "name": "ref_audios.ref_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
         }
       ],
       "outputs": [

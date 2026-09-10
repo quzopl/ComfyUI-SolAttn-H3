@@ -121,10 +121,21 @@ silently disables one of the two.
 The audio VAE therefore feeds both the conditioning node and the decode, and a
 graph missing that wire will not run.
 
-References arrive on Autogrow sockets, `ref_image_0` upward
-(`comfy_api/latest/_io.py:1126` builds them as `f"{prefix}{i}"`). The graph ships
-three connected; the node accepts nine, plus three reference videos and three
-reference audios on their own sockets.
+References arrive on Autogrow sockets. The canonical input id carries the group
+name — `ref_images.ref_image_0`, not `ref_image_0` — because
+`finalize_prefix` (`comfy_api/latest/_io.py:1074`) joins the group and the
+per-slot name with a dot, and both the UI and the API format use that id. In the
+UI graph each one also needs `"label"` (what the node draws) and `"shape": 7`
+(optional socket); emit the bare name instead and the frontend treats it as a
+stray socket and adds its own template one beside it, so the node shows
+**two** `ref_image_0`.
+
+**Only one free socket per group is shown at a time.** The graph ships three
+images connected plus one empty `ref_image_3`, and a single empty slot for each
+of `ref_video_0`, `ref_video_audio_0` and `ref_audio_0`. `ref_audio_1` and
+`ref_audio_2` are not missing — Autogrow reveals the next slot as you fill the
+current one. The node accepts nine images, three reference videos, three
+soundtracks for those videos, and three standalone audios.
 
 **Connect them in the order your `<Picture N>` tags use** — `<Picture 1>` is
 `ref_image_0`. The tokenizer presents references in connection order, so a
