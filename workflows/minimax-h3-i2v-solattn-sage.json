@@ -291,6 +291,12 @@
           "type": "IMAGE",
           "link": 4,
           "shape": 7
+        },
+        {
+          "name": "last_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
         }
       ],
       "outputs": [

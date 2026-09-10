@@ -404,13 +404,6 @@
           "link": 7
         },
         {
-          "label": "ref_image_3",
-          "name": "ref_images.ref_image_3",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
-        },
-        {
           "label": "ref_video_0",
           "name": "ref_videos.ref_video_0",
           "shape": 7,
@@ -427,6 +420,20 @@
         {
           "label": "ref_audio_0",
           "name": "ref_audios.ref_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "label": "ref_audio_1",
+          "name": "ref_audios.ref_audio_1",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "label": "ref_audio_2",
+          "name": "ref_audios.ref_audio_2",
           "shape": 7,
           "type": "AUDIO",
           "link": null
@@ -451,8 +458,9 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3ReferenceToVideo",
-        "cnr_id": "comfy-core"
+        "cnr_id": "comfy-core",
+        "ver": "0.30.1",
+        "Node name for S&R": "MiniMaxH3ReferenceToVideo"
       },
       "widgets_values": [
         "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced. <Picture 2> and <Picture 3> supply additional views of the same subject.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The subject shown in <Picture 1> stands in a quiet interior, preserving the appearance, clothing and proportions established across <Picture 1>, <Picture 2> and <Picture 3>. The camera trucks right with small amplitude at slow speed while the subject turns their head toward the light. Soft directional daylight falls from a window on the left, shallow depth of field holds the background gently out of focus, and skin texture stays natural without sharpening.\n\noverall_soundscape: A low room tone with faint traffic beyond the glass, and the soft rustle of fabric as the subject shifts their weight.\n\nnon_diegetic_music: Sustained low strings at a slow tempo, widely spaced.",
