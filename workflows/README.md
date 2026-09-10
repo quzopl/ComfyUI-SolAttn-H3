@@ -1,5 +1,102 @@
 # Workflows
 
+## `minimax-h3-i2v-solattn-sage`
+
+MiniMax-H3 **image-to-video**, Sol-Attn alone, with SageAttention underneath it:
+
+```
+UNETLoader → SolAttnH3 → BasicGuider / BasicScheduler
+```
+
+| File | Use |
+|---|---|
+| `minimax-h3-i2v-solattn-sage.json` | drag into the ComfyUI canvas |
+| `minimax-h3-i2v-solattn-sage.api.json` | POST to `/prompt` |
+
+### SageAttention is a launch flag, not a node
+
+```bash
+python main.py --use-sage-attention
+```
+
+There is no Sage node in this graph and there should not be. ComfyUI's `wrap_attn`
+calls `optimized_attention_override(func, …)` (`comfy/ldm/modules/attention.py:193`)
+where `func` is whatever backend the process was started with — so with the flag
+set, SageAttention *is* what Sol-Attn falls back to when it declines a call, and
+what recomputes the sink's query rows. Without the flag you get SDPA, which is
+roughly 2.5× slower at these shapes, and every measurement in the main README
+stops applying.
+
+### Do not add `Patch Sage Attention KJ`
+
+It is the obvious node to reach for, and it silently breaks this graph.
+KJNodes' `PathchSageAttentionKJ` assigns
+`model_options["transformer_options"]["optimized_attention_override"]` — the same
+key `SolAttnH3` uses. The two overwrite each other, last node in the chain wins,
+and the loser does nothing at all: no warning, no log line, just the speedup
+quietly gone. Use the launch flag instead; it composes, the node does not.
+
+### Before running
+
+1. Point `LoadImage` at your own first frame — the shipped value is a placeholder.
+2. The loaders ship with the NVFP4 filenames; switch them in the dropdowns if you
+   run int8. Nothing else in the graph depends on that choice — attention time is
+   identical either way (measured: dense 29.69–29.94 ms per call across both).
+3. `width`/`height` are independent of the input image. Match your frame's aspect
+   ratio or the result is stretched.
+4. `length` snaps **up** to the model's 17k+5 grid: 124 (~5 s), 141, 158, …,
+   362 (~15 s). Off-grid values are rounded silently — 125 gives you 141 frames.
+
+### It ships at 362 frames on purpose
+
+RTX 5080, real i2v with a first frame, NVFP4 weights, 8 steps, `res_multistep`,
+SageAttention baseline, measurement pass after warm-up, nothing else on the GPU:
+
+| Frames | Sequence | Node off | `sink_mode=prefix` | `sink_mode=text` |
+|---:|---:|---:|---:|---:|
+| 124 | 16 421 | 35.2 s | 39.0 s (**0.90×**) | 34.2 s (1.03×) |
+| **362** | 45 563 | 150.2 s | **137.1 s (1.10×)** | 138.3 s (1.09×) |
+
+**A first frame makes the sink 1436 rows, and the sink is recomputed densely on
+every sparse call.** At 124 frames that is 8.7 % of the sequence and the node
+cannot earn it back — it costs you 10 %. At 362 frames the same sink is 4.9 %
+while attention has grown quadratically, and the node pays.
+
+Note the ordering flips with it. At 124 frames the only way to win is
+`sink_mode=text`, which stops keeping the reference-image rows exact — the rows
+that hold identity in i2v. At 362 frames `prefix` is not just viable, it is
+*faster* than `text` (137.1 vs 138.3 s), so the quality-preserving default is
+also the quick one. There is no trade to make at length.
+
+If you drop to 124 to iterate on a prompt, set `enabled` to false or switch to
+`sink_mode=text`, then switch back for the final render.
+
+15 s at 864×480 fits in 16 GB — 150.2 s with the node off, 137.1 s with it on.
+
+### The prompt is not prose
+
+H3 was trained on the structured output of H3-Context-IR, and ComfyUI passes your
+string through untouched. The shipped prompt keeps that structure —
+`integrated_multimodal_description`, `overall_soundscape`, `non_diegetic_music` —
+and it is worth editing rather than replacing. Dialogue has to be written out
+verbatim inside `<d>…</d>`; saying *that* someone speaks gives you correct mouth
+shapes with no words. See MiniMax's
+[prompt guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md).
+
+### Confirm it is actually running
+
+Once per run, the console should print:
+
+```
+[sol-attn-h3] SM120, CuTe DSL available, backend=cute_sm120, DiT blocks: 50
+[sol-attn-h3] correctness gate PASS max_rel=0.00385 … 
+[sol-attn-h3] routing density {… 'effective_density': 0.258}
+[sol-attn-h3] {… 'sparse_calls': 288, 'dense_calls': 112, 'attn_ms_per_call': …}
+```
+
+`backend=triton` on an SM89+ card means the CuTe runtime is missing. `sparse_calls: 0`
+means every call declined — the named reason is in `declined`.
+
 ## `minimax-h3-i2v-solattn-spectrum`
 
 MiniMax-H3 **image-to-video** with both accelerators chained:
@@ -54,5 +151,7 @@ different failure modes — Spectrum diverges on fast motion, Sol-Attn has a
 floor of roughly 31 dB from the kernel swap alone — so enable them one at a time
 first and judge the quality cost separately.
 
-**On SM89 against SageAttention, Sol-Attn is currently a net loss at `tau=1.0`;
-see the main README.** Stack it under Spectrum only once it is a win on its own.
+**On the Triton backend, against SageAttention, Sol-Attn is a net loss at
+`tau=1.0`** — that is what you get on any card when the CuTe DSL runtime is not
+installed. On `cute_sm89` and `cute_sm120` it wins; see the main README for the
+per-card numbers. Stack it under Spectrum only once it is a win on its own.

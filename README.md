@@ -274,10 +274,25 @@ between different kernels or quantizations measures *divergence*, not quality �
 matched seeds do not survive a changed trajectory. None of these numbers say
 which frame looks better.
 
-**Scope.** Seq 17 504 is the short end. Attention is a minority of step time
-here, the kernel tables above show the margin widening with length, and a 15 s
-clip runs several times longer a sequence. Nothing in this section transfers to
-that without measuring it.
+**Scope — and one thing this table is not.** `bench/ab_bench.py` drives
+`MiniMaxH3ImageToVideo` **without a `first_frame`**, so every number above is
+text-to-video conditioning through the i2v node. That is not a detail: a real
+reference image grows the sink from 494 rows to 1 436, and the sink is
+recomputed densely on every sparse call. Measured on the same card with an
+actual first frame, 8 steps, NVFP4 weights:
+
+| Frames | Sequence | Sink | Node off | Node on |
+|---:|---:|---:|---:|---:|
+| 124 | 16 421 | 1 436 | 35.2 s | 39.0 s (**0.90×**) |
+| 362 | 45 563 | 2 228 | 150.2 s | **137.1 s (1.10×)** |
+
+So the node's sign flips with length once a reference image is in play, and the
+table above — measured without one — reads optimistically for short i2v clips.
+[`workflows/README.md`](workflows/README.md) carries the full i2v breakdown.
+
+Seq 17 504 is also the short end in its own right: attention is a minority of
+step time there, and the kernel tables above show the margin widening with
+length. Nothing here transfers to a longer clip without measuring it.
 
 ### End-to-end, MiniMax-H3 in ComfyUI — SDPA baseline, Triton backend
 
