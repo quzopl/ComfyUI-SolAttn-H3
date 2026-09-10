@@ -97,6 +97,65 @@ Once per run, the console should print:
 `backend=triton` on an SM89+ card means the CuTe runtime is missing. `sparse_calls: 0`
 means every call declined — the named reason is in `declined`.
 
+## `minimax-h3-ref2va-solattn-sage`
+
+MiniMax-H3 **reference-to-video** — up to 9 reference images drive the identity,
+rather than a first frame driving the geometry. Same chain as the i2v graph:
+
+```
+UNETLoader → SolAttnH3 → BasicGuider / BasicScheduler
+```
+
+| File | Use |
+|---|---|
+| `minimax-h3-ref2va-solattn-sage.json` | drag into the ComfyUI canvas |
+| `minimax-h3-ref2va-solattn-sage.api.json` | POST to `/prompt` |
+
+The SageAttention and `Patch Sage Attention KJ` notes from the i2v section apply
+here unchanged — the flag is what wires Sage under Sol-Attn, and the KJ node
+silently disables one of the two.
+
+### What differs from the i2v graph
+
+`MiniMaxH3ReferenceToVideo` takes a third link the i2v node does not: **`audio_vae`**.
+The audio VAE therefore feeds both the conditioning node and the decode, and a
+graph missing that wire will not run.
+
+References arrive on Autogrow sockets, `ref_image_0` upward
+(`comfy_api/latest/_io.py:1126` builds them as `f"{prefix}{i}"`). The graph ships
+three connected; the node accepts nine, plus three reference videos and three
+reference audios on their own sockets.
+
+**Connect them in the order your `<Picture N>` tags use** — `<Picture 1>` is
+`ref_image_0`. The tokenizer presents references in connection order, so a
+mismatch silently points your prompt at the wrong image. Three or four varied
+shots hold identity far better than one.
+
+`ref_image_size` is `match` here, which scales each reference to the
+generation's pixel area. `max` uses the reference pipeline's 2048 px short edge
+for the best identity fidelity and is several times slower — reference tokens
+ride through **every** sampling step, not just the first.
+
+### It ships at 124 frames, and that is the length where the node did not pay
+
+Read this before assuming the node is helping. On the **i2v** sibling, measured
+on an RTX 5080 with NVFP4 weights at 8 steps:
+
+| Frames | Node off | Node on |
+|---:|---:|---:|
+| 124 | 35.2 s | 39.0 s (**0.90×**) |
+| 362 | 150.2 s | 137.1 s (**1.10×**) |
+
+The sink is recomputed densely on every sparse call, so a short sequence cannot
+earn it back. Reference images make the sink **larger** than a single first
+frame, so ref2va should need the longer length even more.
+
+**That last sentence is reasoning from the i2v measurement, not a ref2va
+measurement — this graph has not been timed.** 124 is the default here only
+because it is the safe choice for VRAM: 362 frames plus reference tokens on a
+16 GB card is untested and may not fit. Raise the length for real renders, and
+while iterating at 124 either set `enabled` to false or measure it yourself.
+
 ## `minimax-h3-i2v-solattn-spectrum`
 
 MiniMax-H3 **image-to-video** with both accelerators chained:
