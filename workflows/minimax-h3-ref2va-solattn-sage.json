@@ -30,12 +30,17 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "UNETLoader"
+        "Node name for S&R": "UNETLoader",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         "minimax_h3_ref2va_pruned_nvfp4.safetensors",
         "default"
-      ]
+      ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3_ref2va_pruned_nvfp4.safetensors",
+        "weight_dtype": "default"
+      }
     },
     {
       "id": 2,
@@ -63,13 +68,19 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "CLIPLoader"
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         "minimax",
         "default"
-      ]
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
     },
     {
       "id": 3,
@@ -98,12 +109,16 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAELoader"
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core"
       },
       "title": "Load VAE (video)",
       "widgets_values": [
         "minimax_h3_video_vae_fp16.safetensors"
-      ]
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+      }
     },
     {
       "id": 4,
@@ -132,12 +147,16 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAELoader"
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core"
       },
       "title": "Load VAE (audio)",
       "widgets_values": [
         "minimax_h3_audio_vae_fp32.safetensors"
-      ]
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+      }
     },
     {
       "id": 5,
@@ -171,13 +190,18 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "LoadImage"
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
       },
       "title": "Reference 1  <Picture 1>",
       "widgets_values": [
         "your_reference_1.png",
         "image"
-      ]
+      ],
+      "widgets_values_named": {
+        "image": "your_reference_1.png",
+        "upload": "image"
+      }
     },
     {
       "id": 6,
@@ -211,13 +235,18 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "LoadImage"
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
       },
       "title": "Reference 2  <Picture 2>",
       "widgets_values": [
         "your_reference_2.png",
         "image"
-      ]
+      ],
+      "widgets_values_named": {
+        "image": "your_reference_2.png",
+        "upload": "image"
+      }
     },
     {
       "id": 7,
@@ -251,13 +280,18 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "LoadImage"
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core"
       },
       "title": "Reference 3  <Picture 3>",
       "widgets_values": [
         "your_reference_3.png",
         "image"
-      ]
+      ],
+      "widgets_values_named": {
+        "image": "your_reference_3.png",
+        "upload": "image"
+      }
     },
     {
       "id": 8,
@@ -292,7 +326,8 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "SolAttnH3"
+        "Node name for S&R": "SolAttnH3",
+        "aux_id": "quzopl/ComfyUI-SolAttn-H3"
       },
       "widgets_values": [
         true,
@@ -304,7 +339,18 @@
         true,
         false,
         1
-      ]
+      ],
+      "widgets_values_named": {
+        "enabled": true,
+        "tau": 1.0,
+        "thresh_type": "diag",
+        "first_dense_steps": 0.2,
+        "first_dense_layers": 2,
+        "sink_mode": "prefix",
+        "correctness_gate": true,
+        "strict": false,
+        "kv_splits": 1
+      }
     },
     {
       "id": 9,
@@ -388,7 +434,7 @@
       ],
       "outputs": [
         {
-          "name": "CONDITIONING",
+          "name": "positive",
           "type": "CONDITIONING",
           "links": [
             9
@@ -405,15 +451,23 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3ReferenceToVideo"
+        "Node name for S&R": "MiniMaxH3ReferenceToVideo",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
-        "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced. <Picture 2> and <Picture 3> supply additional views of the same subject.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The subject shown in <Picture 1> stands in a quiet interior, preserving the appearance, clothing and proportions established across <Picture 1>, <Picture 2> and <Picture 3>. The camera trucks right with small amplitude at slow speed while the subject turns their head toward the light. Soft directional daylight falls from a window on the left, shallow depth of field holds the background gently out of focus, and skin texture stays natural without sharpening. Colour is neutral and filmic with clean highlight roll-off.\n\noverall_soundscape: A low room tone with faint traffic beyond the glass, and the soft rustle of fabric as the subject shifts their weight.\n\nnon_diegetic_music: Sustained low strings at a slow tempo, widely spaced, kept well beneath the ambience.",
+        "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced. <Picture 2> and <Picture 3> supply additional views of the same subject.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The subject shown in <Picture 1> stands in a quiet interior, preserving the appearance, clothing and proportions established across <Picture 1>, <Picture 2> and <Picture 3>. The camera trucks right with small amplitude at slow speed while the subject turns their head toward the light. Soft directional daylight falls from a window on the left, shallow depth of field holds the background gently out of focus, and skin texture stays natural without sharpening.\n\noverall_soundscape: A low room tone with faint traffic beyond the glass, and the soft rustle of fabric as the subject shifts their weight.\n\nnon_diegetic_music: Sustained low strings at a slow tempo, widely spaced.",
         864,
         480,
         124,
         "match"
-      ]
+      ],
+      "widgets_values_named": {
+        "prompt": "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced. <Picture 2> and <Picture 3> supply additional views of the same subject.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The subject shown in <Picture 1> stands in a quiet interior, preserving the appearance, clothing and proportions established across <Picture 1>, <Picture 2> and <Picture 3>. The camera trucks right with small amplitude at slow speed while the subject turns their head toward the light. Soft directional daylight falls from a window on the left, shallow depth of field holds the background gently out of focus, and skin texture stays natural without sharpening.\n\noverall_soundscape: A low room tone with faint traffic beyond the glass, and the soft rustle of fabric as the subject shifts their weight.\n\nnon_diegetic_music: Sustained low strings at a slow tempo, widely spaced.",
+        "width": 864,
+        "height": 480,
+        "length": 124,
+        "ref_image_size": "match"
+      }
     },
     {
       "id": 10,
@@ -441,12 +495,17 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "RandomNoise"
+        "Node name for S&R": "RandomNoise",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         42,
         "fixed"
-      ]
+      ],
+      "widgets_values_named": {
+        "noise_seed": 42,
+        "control_after_generate": "fixed"
+      }
     },
     {
       "id": 11,
@@ -474,11 +533,15 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "KSamplerSelect"
+        "Node name for S&R": "KSamplerSelect",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         "res_multistep"
-      ]
+      ],
+      "widgets_values_named": {
+        "sampler_name": "res_multistep"
+      }
     },
     {
       "id": 12,
@@ -517,7 +580,8 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "BasicGuider"
+        "Node name for S&R": "BasicGuider",
+        "cnr_id": "comfy-core"
       }
     },
     {
@@ -552,13 +616,19 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "BasicScheduler"
+        "Node name for S&R": "BasicScheduler",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         "simple",
         20,
         1.0
-      ]
+      ],
+      "widgets_values_named": {
+        "scheduler": "simple",
+        "steps": 20,
+        "denoise": 1.0
+      }
     },
     {
       "id": 14,
@@ -603,7 +673,7 @@
       ],
       "outputs": [
         {
-          "name": "LATENT",
+          "name": "output",
           "type": "LATENT",
           "links": [
             16,
@@ -612,14 +682,15 @@
           "slot_index": 0
         },
         {
-          "name": "LATENT",
+          "name": "denoised_output",
           "type": "LATENT",
           "links": null,
           "slot_index": 1
         }
       ],
       "properties": {
-        "Node name for S&R": "SamplerCustomAdvanced"
+        "Node name for S&R": "SamplerCustomAdvanced",
+        "cnr_id": "comfy-core"
       }
     },
     {
@@ -659,7 +730,8 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecode"
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core"
       },
       "title": "Decode video"
     },
@@ -700,7 +772,8 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecodeAudio"
+        "Node name for S&R": "VAEDecodeAudio",
+        "cnr_id": "comfy-core"
       },
       "title": "Decode audio"
     },
@@ -727,7 +800,8 @@
         {
           "name": "audio",
           "type": "AUDIO",
-          "link": 21
+          "link": 21,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -741,12 +815,17 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "CreateVideo"
+        "Node name for S&R": "CreateVideo",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         24.0,
         8
-      ]
+      ],
+      "widgets_values_named": {
+        "fps": 24.0,
+        "bit_depth": 8
+      }
     },
     {
       "id": 18,
@@ -769,41 +848,55 @@
           "link": 22
         }
       ],
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
       "properties": {
-        "Node name for S&R": "SaveVideo"
+        "Node name for S&R": "SaveVideo",
+        "cnr_id": "comfy-core"
       },
       "widgets_values": [
         "video/H3_ref2va_solattn_sage",
         "auto",
         "auto"
-      ]
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "video/H3_ref2va_solattn_sage",
+        "format": "auto",
+        "codec": "auto"
+      }
     },
     {
       "id": 19,
-      "type": "Note",
+      "type": "MarkdownNote",
       "title": "READ ME FIRST",
       "pos": [
         1700,
         0
       ],
       "size": [
-        580,
-        860
+        620,
+        980
       ],
       "flags": {},
       "order": 18,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "properties": {
-        "text": ""
-      },
+      "properties": {},
       "widgets_values": [
-        "SAGEATTENTION COMES FROM THE LAUNCH FLAG, NOT FROM A NODE.\n\nStart ComfyUI with --use-sage-attention. ComfyUI then hands SageAttention to\nSolAttnH3 as the backend it falls back to, and as the backend that recomputes\nthe sink's query rows. Without the flag you get PyTorch SDPA, roughly 2.5x\nslower at these shapes.\n\nDO NOT ADD 'Patch Sage Attention KJ' TO THIS GRAPH. It writes the same\ntransformer_options['optimized_attention_override'] key SolAttnH3 uses. They\noverwrite each other, last node in the chain wins, and the loser goes silent\n-- no warning, no log line, just the speed gone.\n\nREFERENCE IMAGES. Up to 9 sockets, ref_image_0 upward. Connect them in the\norder your <Picture N> tags use: <Picture 1> is ref_image_0. Three or four\nvaried shots hold identity far better than one. Unused sockets stay empty.\n\nref_image_size='match' scales each reference to the generation's pixel area.\n'max' uses the reference pipeline's 2048px short edge for best identity, and\nis several times slower -- reference tokens ride through EVERY sampling step,\nnot just the first.\n\nLENGTH snaps up to the model's 17k+5 grid: 124 (~5s), 141, 158, ..., 362\n(~15s). Off-grid values are rounded up silently, so 125 gives you 141.\n\nWHETHER SolAttnH3 PAYS DEPENDS ON LENGTH -- and this graph ships at 124,\nwhich is the length where it did NOT pay on the i2v sibling. Measured there\non an RTX 5080, NVFP4, 8 steps, real first frame:\n\n  124 frames   off  35.2s   on  39.0s   ->  0.90x, the node COSTS you 10%\n  362 frames   off 150.2s   on 137.1s   ->  1.10x, the node is worth it\n\nThe sink is recomputed densely on every sparse call, so a short sequence\ncannot earn it back. Reference images make the sink LARGER still, so ref2va\nshould need the longer length even more -- but that is reasoning from the\ni2v measurement, NOT a ref2va measurement. Nobody has timed this graph.\n\nSo: raise length toward 362 for real renders, and while you iterate at 124\neither set enabled=false or measure it yourself first. 124 is the default\nhere only because it is the safe one for VRAM -- 362 plus reference tokens\non a 16 GB card is untested and may not fit.\n\nCHECK IT IS RUNNING. Once per run the console prints:\n  [sol-attn-h3] SM120, CuTe DSL available, backend=cute_sm120, DiT blocks: 50\n  [sol-attn-h3] correctness gate PASS ...\n  [sol-attn-h3] routing density {...}\nbackend=triton on an SM89+ card means the CuTe runtime is missing.\nsparse_calls: 0 means every call declined; the reason is in 'declined'."
+        "## Read me first\n\n**SageAttention comes from the launch flag, not from a node.**\n\n    python main.py --use-sage-attention\n\n`wrap_attn` then passes SageAttention to the override as `func`\n(`comfy/ldm/modules/attention.py:193`), so it becomes what `SolAttnH3` falls\nback to and what recomputes the sink's query rows. Without the flag you get\nPyTorch SDPA, roughly 2.5x slower at these shapes.\n\n**Do not add `Patch Sage Attention KJ` to this graph.** It assigns\n`model_options[\"transformer_options\"][\"optimized_attention_override\"]` — the\nsame key `SolAttnH3` uses. They overwrite each other, the last node in the\nchain wins, and the loser does nothing at all: no warning, no log line, just\nthe speedup quietly gone.\n\n**Confirm it is running.** Once per run the console prints:\n\n    [sol-attn-h3] SM120, CuTe DSL available, backend=cute_sm120, DiT blocks: 50\n    [sol-attn-h3] correctness gate PASS ...\n    [sol-attn-h3] routing density {... 'effective_density': 0.25 ...}\n\n`backend=triton` on an SM89+ card means the CuTe runtime is missing.\n`sparse_calls: 0` means every call declined — the reason is in `declined`.\n\n**Frame length** snaps up to the model's 17k+5 grid: 124 (~5 s), 141, 158, …,\n362 (~15 s). Off-grid values are rounded up silently, so 125 gives you 141.\n\n### Reference images\n\nSockets grow one at a time: connected ones plus a single free slot per group.\n`ref_audio_1` is not missing — it appears once `ref_audio_0` is filled. The node\ntakes 9 images, 3 reference videos, 3 soundtracks for those videos and 3\nstandalone audios.\n\n**Connect them in the order your `<Picture N>` tags use** — `<Picture 1>` is\n`ref_image_0`. The tokenizer presents references in connection order, so a\nmismatch points your prompt at the wrong image without complaining. Three or\nfour varied shots hold identity far better than one.\n\n`ref_image_size='match'` scales each reference to the generation's pixel area.\n`'max'` uses the reference pipeline's 2048 px short edge for the best identity\nfidelity and is several times slower — reference tokens ride through **every**\nsampling step, not just the first.\n\n### Length and whether the node pays\n\nThis graph ships at 124, which on the i2v sibling is the length where the node\ndid *not* pay (0.90x there, against 1.10x at 362). Reference images make the\nsink larger than a single first frame, so ref2va should want the longer length\neven more — **but that is reasoning from the i2v measurement, not a measurement\nof this graph.** 124 is the default here only because it is the safe one for\nVRAM; 362 plus reference tokens on a 16 GB card is untested.\n"
       ],
-      "color": "#432",
-      "bgcolor": "#653"
+      "widgets_values_named": {
+        "text": "## Read me first\n\n**SageAttention comes from the launch flag, not from a node.**\n\n    python main.py --use-sage-attention\n\n`wrap_attn` then passes SageAttention to the override as `func`\n(`comfy/ldm/modules/attention.py:193`), so it becomes what `SolAttnH3` falls\nback to and what recomputes the sink's query rows. Without the flag you get\nPyTorch SDPA, roughly 2.5x slower at these shapes.\n\n**Do not add `Patch Sage Attention KJ` to this graph.** It assigns\n`model_options[\"transformer_options\"][\"optimized_attention_override\"]` — the\nsame key `SolAttnH3` uses. They overwrite each other, the last node in the\nchain wins, and the loser does nothing at all: no warning, no log line, just\nthe speedup quietly gone.\n\n**Confirm it is running.** Once per run the console prints:\n\n    [sol-attn-h3] SM120, CuTe DSL available, backend=cute_sm120, DiT blocks: 50\n    [sol-attn-h3] correctness gate PASS ...\n    [sol-attn-h3] routing density {... 'effective_density': 0.25 ...}\n\n`backend=triton` on an SM89+ card means the CuTe runtime is missing.\n`sparse_calls: 0` means every call declined — the reason is in `declined`.\n\n**Frame length** snaps up to the model's 17k+5 grid: 124 (~5 s), 141, 158, …,\n362 (~15 s). Off-grid values are rounded up silently, so 125 gives you 141.\n\n### Reference images\n\nSockets grow one at a time: connected ones plus a single free slot per group.\n`ref_audio_1` is not missing — it appears once `ref_audio_0` is filled. The node\ntakes 9 images, 3 reference videos, 3 soundtracks for those videos and 3\nstandalone audios.\n\n**Connect them in the order your `<Picture N>` tags use** — `<Picture 1>` is\n`ref_image_0`. The tokenizer presents references in connection order, so a\nmismatch points your prompt at the wrong image without complaining. Three or\nfour varied shots hold identity far better than one.\n\n`ref_image_size='match'` scales each reference to the generation's pixel area.\n`'max'` uses the reference pipeline's 2048 px short edge for the best identity\nfidelity and is several times slower — reference tokens ride through **every**\nsampling step, not just the first.\n\n### Length and whether the node pays\n\nThis graph ships at 124, which on the i2v sibling is the length where the node\ndid *not* pay (0.90x there, against 1.10x at 362). Reference images make the\nsink larger than a single first frame, so ref2va should want the longer length\neven more — **but that is reasoning from the i2v measurement, not a measurement\nof this graph.** 124 is the default here only because it is the safe one for\nVRAM; 362 plus reference tokens on a 16 GB card is untested.\n"
+      },
+      "color": "#222",
+      "bgcolor": "#000"
     }
   ],
   "links": [
